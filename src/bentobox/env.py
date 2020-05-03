@@ -15,7 +15,7 @@ __all__ = [
 
 DEFAULT_PYTHON_INTERPRETER = '/usr/bin/env python3'
 
-BENTOBOX_VERSION = '0.0.1'
+BENTOBOX_VERSION = '0.1.0'
 
 def get_bentobox_version():
     return BENTOBOX_VERSION
