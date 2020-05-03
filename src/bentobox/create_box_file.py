@@ -139,6 +139,7 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
         state = {
             "box_name": box_name,
             "python_interpreter": python_interpreter,
+            "python_interpreter_orig": None,
             "install_dir": None,
             "wrap_mode": wrap_info.wrap_mode.name,
             "wraps": wrap_info.wraps,

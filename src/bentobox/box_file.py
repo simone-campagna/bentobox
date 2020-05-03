@@ -7,6 +7,7 @@
     "box_version": "0.0.1",
     "box_name": "box-name",
     "python_interpreter": "/usr/bin/env python3",
+    "python_interpreter_orig": null,
     "install_dir": null,
     "wrap_mode": "NONE",
     "wraps": null,
@@ -182,8 +183,25 @@ def configure_logging(verbose_level=None, debug=None):
     _LOG_STATE = new_log_state
 
 
+EnvVar = collections.namedtuple(  # pylint: invalid-name
+    "EnvVar",
+    ["var_name", "var_type", "var_value", "default", "description"])
 
-def get_env(var_name, var_type=str, default=None):
+ENV_VARS = {}
+
+def get_env(var_name, var_type=str, default=None, description=''):
+    """Get an environment variable"""
+    var_value = _get_env(var_name, var_type, default)
+    ENV_VARS[var_name] = EnvVar(
+        var_name=var_name,
+        var_type=var_type,
+        var_value=var_value,
+        default=default,
+        description=description)
+    return var_value
+
+
+def _get_env(var_name, var_type=str, default=None):
     """Get an environment variable"""
     value = os.environ.get(var_name, None)
     if value is None:
@@ -207,13 +225,22 @@ def boolean(value):
     return bool(int(value))
 
 
-INSTALL_DIR = get_env("BENTOBOX_INSTALL_DIR", var_type=Path, default=None)
-WRAPPING = get_env("BENTOBOX_WRAPPING", var_type=boolean, default=True)
-VERBOSE_LEVEL = get_env("BENTOBOX_VERBOSE_LEVEL", var_type=int, default=STATE['verbose_level'])
-DEBUG = get_env("BENTOBOX_DEBUG", var_type=boolean, default=STATE['debug'])
-FREEZE = get_env("BENTOBOX_FREEZE", var_type=boolean, default=STATE['freeze'])
-UPDATE_SHEBANG = get_env("BENTOBOX_FREEZE", var_type=boolean, default=STATE['update_shebang'])
-FORCE_REINSTALL = get_env("BENTOBOX_FORCE_REINSTALL", var_type=boolean, default=False)
+INSTALL_DIR = get_env("BBOX_INSTALL_DIR", var_type=Path, default=None,
+                      description="set install dir")
+WRAPPING = get_env("BBOX_WRAPPING", var_type=boolean, default=True,
+                      description="enable/disable wrapping")
+VERBOSE_LEVEL = get_env("BBOX_VERBOSE_LEVEL", var_type=int, default=STATE['verbose_level'],
+                      description="set verbose level")
+DEBUG = get_env("BBOX_DEBUG", var_type=boolean, default=STATE['debug'],
+                      description="enable/disable debug mode")
+FREEZE = get_env("BBOX_FREEZE", var_type=boolean, default=STATE['freeze'],
+                      description="enable/disable freezing virtualenv")
+UPDATE_SHEBANG = get_env("BBOX_UPDATE_SHEBANG", var_type=boolean, default=STATE['update_shebang'],
+                      description="enable/disable update of shebang")
+UNINSTALL = get_env("BBOX_UNINSTALL", var_type=boolean, default=False,
+                      description="force uninstall")
+FORCE_REINSTALL = get_env("BBOX_FORCE_REINSTALL", var_type=boolean, default=False,
+                      description="force reinstall")
 
 
 def get_verbose_level(verbose_level=None):
@@ -550,17 +577,30 @@ def replace_state(output_path, state):
                     output_path_swp.rename(output_path)
 
 
-def _update_box_header(printer, python_interpreter, verbose_level=None, debug=None):
+def _update_box_header(printer, python_interpreter):
     """Update the box header in place"""
-    verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
     if not UPDATE_SHEBANG:
         return
     if STATE['python_interpreter'] == python_interpreter:
         return
     printer("replacing shebang...")
     state = STATE.copy()
+    if not state['python_interpreter_orig']:
+        state['python_interpreter_orig'] = state['python_interpreter']
     state['python_interpreter'] = python_interpreter
+    replace_state(__file__, state)
+
+
+def _reset_box_header(printer):
+    """Reset the box header in place"""
+    if not UPDATE_SHEBANG:
+        return
+    if STATE['python_interpreter_orig'] is None:
+        return
+    printer("resetting shebang...")
+    state = STATE.copy()
+    state['python_interpreter'] = state['python_interpreter_orig']
+    state['python_interpreter_orig'] = None
     replace_state(__file__, state)
 
 
@@ -695,7 +735,7 @@ def install(env_file=None, reinstall=None, verbose_level=None, debug=None, updat
     }
 
     do_install = True
-    if bentobox_config_file.exists() and not FORCE_REINSTALL:
+    if bentobox_config_file.exists():
         with open(bentobox_config_file, "r") as fconfig:
             installed_config = json.load(fconfig)
         if reinstall:
@@ -821,8 +861,7 @@ export PATH="${{PATH}}:{venv_bin_dir}"
                 if python_exe.is_file():
                     python_interpreter = python_exe
                     break
-            _update_box_header(printer, str(python_interpreter),
-                               verbose_level=verbose_level, debug=debug)
+            _update_box_header(printer, str(python_interpreter))
 
     if not do_install:
         config = get_config()
@@ -921,7 +960,7 @@ def cmd_uninstall(verbose_level=None, debug=None):
     install_dir = get_install_dir()
     shutil.rmtree(install_dir, ignore_errors=True)
     with Printer(verbose_level=verbose_level, debug=debug) as printer:
-        _update_box_header(printer, '/usr/bin/env python3')
+        _reset_box_header(printer)
 
 
 def cmd_show(mode='text'):
@@ -940,6 +979,16 @@ def cmd_list(what='commands'):
     elif what == 'packages':
         for pkg in STATE['packages']:
             print(format_package_data(pkg))
+    elif what == 'environment':
+        for var_name, var_info in ENV_VARS.items():
+            dct = var_info._asdict()
+            var_type = dct['var_type']
+            dct['var_type_name'] = getattr(var_type, '__name__', str(var_type))
+            print("""\
+{var_name}: {description}
+  - type:    {var_type_name}
+  - value:   {var_value!r}
+  - default: {default!r}""".format(**dct))
 
 
 def cmd_run(command, args, verbose_level=None, debug=None, reinstall=False):
@@ -1113,11 +1162,11 @@ Box {box_name!r} - list available commands
         action="store_const", const="packages",
         help="list packages",
         **what_kwargs)
-    # what_mgrp.add_argument(
-    #     "-b", "--boxes",
-    #     action="store_const", const="boxes",
-    #     help="list installed boxes",
-    #     **what_kwargs)
+    what_mgrp.add_argument(
+        "-e", "--environment",
+        action="store_const", const="environment",
+        help="list bentobox environment variables",
+        **what_kwargs)
     return parser
 
 
@@ -1282,6 +1331,27 @@ def main(args=None):
     if args is None:
         args = sys.argv[1:]
 
+    if FORCE_REINSTALL or UNINSTALL:
+        configure_logging()
+        config = get_config()
+        if config is None:
+            LOG.warning("%r is not installed", STATE['box_name'])
+        else:   
+            cmd_uninstall()
+            LOG.warning("%r has been successfully uninstalled", STATE['box_name'])
+        if FORCE_REINSTALL:
+            if config is not None:
+                executable = __file__
+                cmdline = [executable] + list(args)
+                environ = get_environ(config)
+                environ.pop('BBOX_FORCE_REINSTALL', None)
+                return os.execve(executable, cmdline, environ)
+        else:
+            if args:
+                LOG.warning("command line arguments ignored: %s",
+                            " ".join(shlex.quote(arg) for arg in args))
+            sys.exit(0)
+
     wrap_info = get_wrap_info()
     if wrap_info.wrap_mode is WrapMode.SINGLE:
         return main_wrap_single(wrap_info.wraps, args)
@@ -1382,7 +1452,7 @@ def _wrap_command(config, command, args):
         print("""
   You can reconfigure the box with the following command:
 
-      $ BENTOBOX_WRAPPING=off {prog} configure --in-place -w COMMAND
+      $ BBOX_WRAPPING=off {prog} configure --in-place -w COMMAND
 
   where COMMAND is any installed command
 ################################################################################
