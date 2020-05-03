@@ -286,7 +286,7 @@ Bentobox environment variables
 Single-command and multiple-command boxes normally do not show the *installer* interface;
 so, for instance, they cannot be configured.
 Anyway, if you have a command box, you can access the installer interface by disabling wrapping; this can be done
-by setting the ``BENTOBOX_WRAPPING=off`` environment variable:
+by setting the ``BBOX_WRAPPING=off`` environment variable:
 
 ::
 
@@ -302,7 +302,7 @@ by setting the ``BENTOBOX_WRAPPING=off`` environment variable:
   optional arguments:
     -h, --help  show this help message and exit
 
-  $ BENTOBOX_WRAPPING=off ./simple-add -h
+  $ BBOX_WRAPPING=off ./simple-add -h
   usage: simple-add [-h] {show,configure,extract,install,uninstall,list,run} ...
   
   Box simple-calc - manage box
@@ -316,10 +316,11 @@ by setting the ``BENTOBOX_WRAPPING=off`` environment variable:
 
 The full list of environment variables is:
 
- * ``BENTOBOX_INSTALL_DIR=/tmp/data``: set the install dir to ``/tmp/data``
- * ``BENTOBOX_WRAPPING=off``: enable/disable wrapping
- * ``BENTOBOX_VERBOSE_LEVEL=1``: set the verbose level to ``1``
- * ``BENTOBOX_DEBUG=on``: enable/disable debug mode
- * ``BENTOBOX_FREEZE=off``: enable/disable freezing of python interpreter
- * ``BENTOBOX_UPDATE_SHEBANG=off``: enable/disable updating of the box shebang
- * ``BENTOBOX_FORCE_REINSTALL=on``: if enabled forces a full box reinstall
+ * ``BBOX_INSTALL_DIR=/tmp/data``: set the install dir to ``/tmp/data``
+ * ``BBOX_WRAPPING=off``: enable/disable wrapping
+ * ``BBOX_VERBOSE_LEVEL=1``: set the verbose level to ``1``
+ * ``BBOX_DEBUG=on``: enable/disable debug mode
+ * ``BBOX_FREEZE=off``: enable/disable freezing of python interpreter
+ * ``BBOX_UPDATE_SHEBANG=off``: enable/disable updating of the box shebang
+ * ``BBOX_FORCE_REINSTALL=on``: force a reinstall
+ * ``BBOX_UNINSTALL=on``: uninstall the box and restores the shebang; command line arguments are ignored
