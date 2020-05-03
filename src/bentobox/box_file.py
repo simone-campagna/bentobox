@@ -183,8 +183,25 @@ def configure_logging(verbose_level=None, debug=None):
     _LOG_STATE = new_log_state
 
 
+EnvVar = collections.namedtuple(  # pylint: invalid-name
+    "EnvVar",
+    ["var_name", "var_type", "var_value", "default", "description"])
 
-def get_env(var_name, var_type=str, default=None):
+ENV_VARS = {}
+
+def get_env(var_name, var_type=str, default=None, description=''):
+    """Get an environment variable"""
+    var_value = _get_env(var_name, var_type, default)
+    ENV_VARS[var_name] = EnvVar(
+        var_name=var_name,
+        var_type=var_type,
+        var_value=var_value,
+        default=default,
+        description=description)
+    return var_value
+
+
+def _get_env(var_name, var_type=str, default=None):
     """Get an environment variable"""
     value = os.environ.get(var_name, None)
     if value is None:
@@ -208,14 +225,22 @@ def boolean(value):
     return bool(int(value))
 
 
-INSTALL_DIR = get_env("BBOX_INSTALL_DIR", var_type=Path, default=None)
-WRAPPING = get_env("BBOX_WRAPPING", var_type=boolean, default=True)
-VERBOSE_LEVEL = get_env("BBOX_VERBOSE_LEVEL", var_type=int, default=STATE['verbose_level'])
-DEBUG = get_env("BBOX_DEBUG", var_type=boolean, default=STATE['debug'])
-FREEZE = get_env("BBOX_FREEZE", var_type=boolean, default=STATE['freeze'])
-UPDATE_SHEBANG = get_env("BBOX_FREEZE", var_type=boolean, default=STATE['update_shebang'])
-UNINSTALL = get_env("BBOX_UNINSTALL", var_type=boolean, default=False)
-FORCE_REINSTALL = get_env("BBOX_FORCE_REINSTALL", var_type=boolean, default=False)
+INSTALL_DIR = get_env("BBOX_INSTALL_DIR", var_type=Path, default=None,
+                      description="set install dir")
+WRAPPING = get_env("BBOX_WRAPPING", var_type=boolean, default=True,
+                      description="enable/disable wrapping")
+VERBOSE_LEVEL = get_env("BBOX_VERBOSE_LEVEL", var_type=int, default=STATE['verbose_level'],
+                      description="set verbose level")
+DEBUG = get_env("BBOX_DEBUG", var_type=boolean, default=STATE['debug'],
+                      description="enable/disable debug mode")
+FREEZE = get_env("BBOX_FREEZE", var_type=boolean, default=STATE['freeze'],
+                      description="enable/disable freezing virtualenv")
+UPDATE_SHEBANG = get_env("BBOX_UPDATE_SHEBANG", var_type=boolean, default=STATE['update_shebang'],
+                      description="enable/disable update of shebang")
+UNINSTALL = get_env("BBOX_UNINSTALL", var_type=boolean, default=False,
+                      description="force uninstall")
+FORCE_REINSTALL = get_env("BBOX_FORCE_REINSTALL", var_type=boolean, default=False,
+                      description="force reinstall")
 
 
 def get_verbose_level(verbose_level=None):
@@ -954,6 +979,16 @@ def cmd_list(what='commands'):
     elif what == 'packages':
         for pkg in STATE['packages']:
             print(format_package_data(pkg))
+    elif what == 'environment':
+        for var_name, var_info in ENV_VARS.items():
+            dct = var_info._asdict()
+            var_type = dct['var_type']
+            dct['var_type_name'] = getattr(var_type, '__name__', str(var_type))
+            print("""\
+{var_name}: {description}
+  - type:    {var_type_name}
+  - value:   {var_value!r}
+  - default: {default!r}""".format(**dct))
 
 
 def cmd_run(command, args, verbose_level=None, debug=None, reinstall=False):
@@ -1127,11 +1162,11 @@ Box {box_name!r} - list available commands
         action="store_const", const="packages",
         help="list packages",
         **what_kwargs)
-    # what_mgrp.add_argument(
-    #     "-b", "--boxes",
-    #     action="store_const", const="boxes",
-    #     help="list installed boxes",
-    #     **what_kwargs)
+    what_mgrp.add_argument(
+        "-e", "--environment",
+        action="store_const", const="environment",
+        help="list bentobox environment variables",
+        **what_kwargs)
     return parser
 
 
