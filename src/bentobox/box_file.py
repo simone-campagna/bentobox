@@ -4,16 +4,16 @@
 
 """
 {
-    "box_version": "0.0.1",
+    "box_version": "0.1.0",
     "box_name": "box-name",
     "python_interpreter": "/usr/bin/env python3",
+    "python_interpreter_orig": null,
     "install_dir": null,
     "wrap_mode": "NONE",
     "wraps": null,
     "freeze": true,
     "update_shebang": true,
     "verbose_level": 0,
-    "debug": false,
     "pip_install_args": [],
     "packages": [
         {
@@ -22,11 +22,11 @@
         },
         {
             "package_type": "archive",
-            "package_name": "prj-0.0.1.tar.gz"
+            "package_name": "prj-0.1.0.tar.gz"
         }
     ],
     "archives": {
-         "prj-0.0.1.tar.gz": "abcd0123"
+         "prj-0.1.0.tar.gz": "abcd0123"
     }
 }
 """
@@ -38,6 +38,7 @@ import collections.abc
 import contextlib
 import enum
 import functools
+import io
 import json
 import logging
 import logging.config
@@ -119,7 +120,7 @@ def load_state(json_data):
 STATE = load_state(__doc__)
 
 LOG = logging.getLogger(__name__)
-VERSION = '0.0.1'
+VERSION = '0.1.0'
 
 UNDEFINED = object()
 
@@ -133,20 +134,25 @@ HEADER_FILL_LEN = 20 * (80 + 1)
 _LOG_STATE = None
 
 
+# initial values:
 VERBOSE_LEVEL = 0
-DEBUG = False
-WRAPPING = True
 
 
-def configure_logging(verbose_level=None, debug=None):
+def get_verbose_level(verbose_level=None):
+    """Return verbose level"""
+    if verbose_level is None:
+        verbose_level = VERBOSE_LEVEL
+    return verbose_level
+
+
+def configure_logging(verbose_level=None):
     """Configure global logging"""
     verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
     global _LOG_STATE  # pylint: disable=global-statement
-    new_log_state = (verbose_level, debug)
+    new_log_state = verbose_level
     if _LOG_STATE == new_log_state:
         return
-    if debug or verbose_level >= 3:
+    if verbose_level >= 3:
         log_level = 'DEBUG'
     elif verbose_level >= 2:
         log_level = 'INFO'
@@ -182,8 +188,28 @@ def configure_logging(verbose_level=None, debug=None):
     _LOG_STATE = new_log_state
 
 
+configure_logging()
 
-def get_env(var_name, var_type=str, default=None):
+
+VarInfo = collections.namedtuple(  # pylint: disable=invalid-name
+    "VarInfo",
+    ["var_name", "var_type", "var_value", "default", "description"])
+
+ENV_VARS = {}
+
+def get_env_var(var_name, var_type=str, default=None, description=None):
+    """Get an environment variable"""
+    var_value = _get_env_var(var_name, var_type, default)
+    ENV_VARS[var_name] = VarInfo(
+        var_name=var_name,
+        var_type=var_type,
+        var_value=var_value,
+        default=default,
+        description=description)
+    return var_value
+
+
+def _get_env_var(var_name, var_type=str, default=None):
     """Get an environment variable"""
     value = os.environ.get(var_name, None)
     if value is None:
@@ -192,7 +218,6 @@ def get_env(var_name, var_type=str, default=None):
         try:
             return var_type(value)
         except (ValueError, TypeError):
-            configure_logging()
             LOG.warning("%s=%r: invalid value", var_name, value)
             return default
 
@@ -207,27 +232,27 @@ def boolean(value):
     return bool(int(value))
 
 
-INSTALL_DIR = get_env("BENTOBOX_INSTALL_DIR", var_type=Path, default=None)
-WRAPPING = get_env("BENTOBOX_WRAPPING", var_type=boolean, default=True)
-VERBOSE_LEVEL = get_env("BENTOBOX_VERBOSE_LEVEL", var_type=int, default=STATE['verbose_level'])
-DEBUG = get_env("BENTOBOX_DEBUG", var_type=boolean, default=STATE['debug'])
-FREEZE = get_env("BENTOBOX_FREEZE", var_type=boolean, default=STATE['freeze'])
-UPDATE_SHEBANG = get_env("BENTOBOX_FREEZE", var_type=boolean, default=STATE['update_shebang'])
-FORCE_REINSTALL = get_env("BENTOBOX_FORCE_REINSTALL", var_type=boolean, default=False)
-
-
-def get_verbose_level(verbose_level=None):
-    """Return verbose level"""
-    if verbose_level is None:
-        verbose_level = VERBOSE_LEVEL
-    return verbose_level
-
-
-def get_debug(debug=None):
-    """Return debug"""
-    if debug is None:
-        debug = DEBUG
-    return debug
+INSTALL_DIR = get_env_var(
+    "BBOX_INSTALL_DIR", var_type=Path, default=None,
+    description="set install dir")
+WRAPPING = get_env_var(
+    "BBOX_WRAPPING", var_type=boolean, default=True,
+    description="enable/disable wrapping")
+VERBOSE_LEVEL = get_env_var(
+    "BBOX_VERBOSE_LEVEL", var_type=int, default=STATE['verbose_level'],
+    description="set verbose level")
+FREEZE = get_env_var(
+    "BBOX_FREEZE", var_type=boolean, default=STATE['freeze'],
+    description="enable/disable freezing virtualenv")
+UPDATE_SHEBANG = get_env_var(
+    "BBOX_UPDATE_SHEBANG", var_type=boolean, default=STATE['update_shebang'],
+    description="enable/disable update of shebang")
+UNINSTALL = get_env_var(
+    "BBOX_UNINSTALL", var_type=boolean, default=False,
+    description="force uninstall")
+FORCE_REINSTALL = get_env_var(
+    "BBOX_FORCE_REINSTALL", var_type=boolean, default=False,
+    description="force reinstall")
 
 
 def default_install_dir():
@@ -385,17 +410,24 @@ def get_box_type(state=STATE):
 ### utils ######################################################################
 ################################################################################
 
-class Printer:
-    """The printer context manager"""
-    def __init__(self, file=sys.stderr, header=HEADER, verbose_level=None, debug=None):
+class Output:
+    """Output context manager"""
+    def __init__(self, header=HEADER, verbose_level=None):
         verbose_level = get_verbose_level(verbose_level)
-        debug = get_debug(debug)
-        self._file = file
         self._header = header
         self._prev_line = None
         self._verbose_level = verbose_level
-        self._debug = debug
-        self._enabled = self._verbose_level or self._debug
+        if self._verbose_level > 0:
+            self._file = sys.stderr
+            self._persistent = self._verbose_level >= 2 or not self._file.isatty()
+            self._columns = None
+            if not self._persistent:
+                with contextlib.suppress(OSError):
+                    self._columns, _ = os.get_terminal_size()
+        else:
+            self._file = io.StringIO()
+            self._persistent = True
+            self._columns = None
 
     def __enter__(self):
         return self
@@ -405,36 +437,36 @@ class Printer:
 
     def clear(self):
         """Clear the last printed line"""
-        if self._enabled:
-            if self._prev_line and not self._debug:
-                self._file.write('\r' + (' ' * len(self._prev_line)) + '\r')
-                self._file.flush()
-            self._prev_line = None
+        if self._prev_line and not self._persistent:
+            self._file.write('\r' + (' ' * len(self._prev_line)) + '\r')
+            self._file.flush()
+        self._prev_line = None
 
-    def __call__(self, text, debug=None):
-        if self._enabled:
-            for text_line in text.split('\n'):
-                if debug is None:
-                    debug = self._debug
-                line = self._header + text_line
-                if debug:
-                    self._file.write(line + '\n')
-                    self._prev_line = None
-                else:
-                    self.clear()
-                    self._file.write(line)
-                    self._prev_line = line
-                self._file.flush()
+    def __call__(self, text):
+        persistent = self._persistent
+        columns = self._columns
+        for text_line in text.split('\n'):
+            line = self._header + text_line
+            if persistent:
+                self._file.write(line + '\n')
+                self._prev_line = None
+            else:
+                self.clear()
+                if columns is not None:
+                    line = line[:columns]
+                self._file.write(line)
+                self._prev_line = line
+            self._file.flush()
 
     def run_command(self, cmdline, *args, raising=True, **kwargs):
-        debug = self._debug
+        persistent = self._persistent
         verbose_level = self._verbose_level
         result = subprocess.run(cmdline, *args, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, check=False, **kwargs)
         clist = [cmdline[0]] + [shlex.quote(arg) for arg in cmdline[1:]]
         cmd = " ".join(clist)
         kwargs = {}
-        if debug:
+        if persistent:
             self("$ " + cmd)
             if verbose_level > 2 or result.returncode:
                 self(str(result.stdout, 'utf-8'), **kwargs)
@@ -550,22 +582,35 @@ def replace_state(output_path, state):
                     output_path_swp.rename(output_path)
 
 
-def _update_box_header(printer, python_interpreter, verbose_level=None, debug=None):
+def _update_box_header(output, python_interpreter):
     """Update the box header in place"""
-    verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
     if not UPDATE_SHEBANG:
         return
     if STATE['python_interpreter'] == python_interpreter:
         return
-    printer("replacing shebang...")
+    output("replacing shebang...")
     state = STATE.copy()
+    if not state['python_interpreter_orig']:
+        state['python_interpreter_orig'] = state['python_interpreter']
     state['python_interpreter'] = python_interpreter
     replace_state(__file__, state)
 
 
+def _reset_box_header(output):
+    """Reset the box header in place"""
+    if not UPDATE_SHEBANG:
+        return
+    if STATE['python_interpreter_orig'] is None:
+        return
+    output("resetting shebang...")
+    state = STATE.copy()
+    state['python_interpreter'] = state['python_interpreter_orig']
+    state['python_interpreter_orig'] = None
+    replace_state(__file__, state)
+
+
 def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
-              verbose_level=UNDEFINED, debug=UNDEFINED, freeze=UNDEFINED,
+              verbose_level=UNDEFINED, freeze=UNDEFINED,
               update_shebang=UNDEFINED):
     """Change the STATE and update the file if necessary"""
     state = STATE.copy()
@@ -579,8 +624,6 @@ def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
         state['wraps'] = wrap_info.wraps
     if verbose_level is not UNDEFINED:
         state['verbose_level'] = verbose_level
-    if debug is not UNDEFINED:
-        state['debug'] = debug
     if freeze is not UNDEFINED:
         state['freeze'] = freeze
     if update_shebang is not UNDEFINED:
@@ -592,12 +635,12 @@ def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
 ### exported functions #########################################################
 ################################################################################
 
-def _extract(printer, archives, output_dir):
+def _extract(output, archives, output_dir):
     """Implementation of the extract function"""
     if not output_dir.is_dir():
-        printer("creating output dir {}...".format(output_dir))
+        output("creating output dir {}...".format(output_dir))
         output_dir.mkdir()
-    printer("reading archives from {}...".format(__file__))
+    output("reading archives from {}...".format(__file__))
     archive_paths = {}
     archive_path = None
     archive_file = None
@@ -627,7 +670,7 @@ def _extract(printer, archives, output_dir):
                         if not archive_path.parent.is_dir():
                             archive_path.parent.mkdir(parents=True)
                         archive_paths[archive_hash] = archive_path
-                        printer("extracting archive {} [{}]...".format(archive_name, archive_hash))
+                        output("extracting archive {} [{}]...".format(archive_name, archive_hash))
                         archive_file = open(archive_path, 'wb')
                         status = 'archive-data'
                     else:
@@ -643,12 +686,12 @@ def _extract(printer, archives, output_dir):
     return archive_paths
 
 
-def extract(archives, output_dir=None, verbose_level=None, debug=None):
+def extract(archives, output_dir=None, verbose_level=None):
     """Extract archives with a given hash"""
     if output_dir is None:
         output_dir = get_install_dir() / 'boxes'
-    with Printer(verbose_level=verbose_level, debug=debug) as printer:
-        return _extract(printer, archives, output_dir)
+    with Output(verbose_level=verbose_level) as output:
+        return _extract(output, archives, output_dir)
 
 
 def check(install_dir=None):
@@ -663,9 +706,8 @@ def check(install_dir=None):
         check_wrap_info(wrap_info)
 
 
-def install(env_file=None, reinstall=None, verbose_level=None, debug=None, update_shebang=None):
+def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=None):
     """Install the box, if needed"""
-    debug = get_debug(debug)
     if update_shebang is None:
         update_shebang = UPDATE_SHEBANG
 
@@ -695,7 +737,7 @@ def install(env_file=None, reinstall=None, verbose_level=None, debug=None, updat
     }
 
     do_install = True
-    if bentobox_config_file.exists() and not FORCE_REINSTALL:
+    if bentobox_config_file.exists():
         with open(bentobox_config_file, "r") as fconfig:
             installed_config = json.load(fconfig)
         if reinstall:
@@ -728,13 +770,13 @@ def install(env_file=None, reinstall=None, verbose_level=None, debug=None, updat
             else:
                 do_install = False
 
-    with Printer(verbose_level=verbose_level, debug=debug) as printer:
+    with Output(verbose_level=verbose_level) as output:
 
         if do_install:
-            def freeze_python(printer, venv_bin_dir, python_name):
+            def freeze_python(output, venv_bin_dir, python_name):
                 python_exe = venv_bin_dir / python_name
                 if python_exe.exists():
-                    printer("freezing python {}...".format(python_name))
+                    output("freezing python {}...".format(python_name))
                     if python_exe.is_symlink():
                         python_actual_exe = python_exe.resolve()
                         python_exe.unlink()
@@ -755,19 +797,19 @@ exec {python_exe} "$@"
 
             try:
                 if bentobox_config_file.exists():
-                    printer("removing install dir {}...".format(install_dir))
+                    output("removing install dir {}...".format(install_dir))
                     shutil.rmtree(install_dir, ignore_errors=True)
 
                 if not archives_dir.is_dir():
                     archives_dir.mkdir(parents=True)
 
-                archive_paths = _extract(printer, None, archives_dir)
+                archive_paths = _extract(output, None, archives_dir)
 
-                printer("creating virtualenv {}...".format(venv_dir))
+                output("creating virtualenv {}...".format(venv_dir))
                 venv.create(venv_dir, with_pip=True)
                 if FREEZE:
                     for python_name in 'python3', 'python':
-                        freeze_python(printer, venv_bin_dir, python_name)
+                        freeze_python(output, venv_bin_dir, python_name)
                 base_commands = set(find_executables(venv_bin_dir))
 
                 pip_path = venv_bin_dir / "pip"
@@ -779,21 +821,21 @@ exec {python_exe} "$@"
                     package_type = package_data['type']
                     package_name = package_data['name']
                     if package_type == 'package':
-                        printer("installing package {}...".format(package_name))
+                        output("installing package {}...".format(package_name))
                         cmdline = [str(pip_path), "install"] + pip_install_args + [package_name]
-                        printer.run_command(cmdline, env=environ)
+                        output.run_command(cmdline, env=environ)
                     elif package_type == 'archive':
                         archive_path = archive_paths[package_data['hash']]
-                        printer("installing package {}...".format(package_name))
+                        output("installing package {}...".format(package_name))
                         cmdline = [str(pip_path), "install"]
                         cmdline += pip_install_args
                         cmdline += [str(archive_path)]
-                        printer.run_command(cmdline, env=environ)
+                        output.run_command(cmdline, env=environ)
 
                 installed_commands = set(find_executables(venv_bin_dir)).difference(base_commands)
                 config["installed_commands"] = sorted(installed_commands)
 
-                printer("creating activate file {}...".format(bentobox_env_file))
+                output("creating activate file {}...".format(bentobox_env_file))
                 with open(bentobox_env_file, "w") as fhandle:
                     fhandle.write("""\
 # environment for box {box_name}
@@ -801,7 +843,7 @@ exec {python_exe} "$@"
 
 export PATH="${{PATH}}:{venv_bin_dir}"
 """.format(venv_bin_dir=venv_bin_dir, **STATE))
-                printer("creating config file {}...".format(bentobox_config_file))
+                output("creating config file {}...".format(bentobox_config_file))
                 with open(bentobox_config_file, "w") as fhandle:
                     print(json.dumps(tojson(config), indent=4, sort_keys=True), file=fhandle)
             except:  # pylint: disable=bare-except
@@ -809,7 +851,7 @@ export PATH="${{PATH}}:{venv_bin_dir}"
                 raise
 
         if env_file:
-            printer("copying env file to {}...".format(env_file))
+            output("copying env file to {}...".format(env_file))
             if not env_file.parent.is_dir():
                 env_file.parent.mkdir(parents=True)
             shutil.copyfile(bentobox_env_file, env_file)
@@ -821,8 +863,7 @@ export PATH="${{PATH}}:{venv_bin_dir}"
                 if python_exe.is_file():
                     python_interpreter = python_exe
                     break
-            _update_box_header(printer, str(python_interpreter),
-                               verbose_level=verbose_level, debug=debug)
+            _update_box_header(output, str(python_interpreter))
 
     if not do_install:
         config = get_config()
@@ -857,34 +898,30 @@ Box: {box_name} [{box_type}]
 ################################################################################
 
 def cmd_configure(output_path, install_dir, wrap_info=UNDEFINED, update_shebang=UNDEFINED,
-                  verbose_level=UNDEFINED, debug=UNDEFINED, freeze=UNDEFINED):
+                  verbose_level=UNDEFINED, freeze=UNDEFINED):
     """Configure command"""
     return configure(output_path, install_dir, wrap_info=wrap_info,
-                     verbose_level=verbose_level, debug=debug,
+                     verbose_level=verbose_level,
                      update_shebang=update_shebang, freeze=freeze)
 
 
-def cmd_extract(archives, output_dir=None, verbose_level=None, debug=None):
+def cmd_extract(archives, output_dir=None, verbose_level=None):
     """Extract command"""
     verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
     extract(
         output_dir=output_dir,
         archives=archives,
-        verbose_level=verbose_level,
-        debug=debug)
+        verbose_level=verbose_level)
 
 
-def cmd_install(env_file, reinstall=False, update_shebang=None, verbose_level=None, debug=None):
+def cmd_install(env_file, reinstall=False, update_shebang=None, verbose_level=None):
     """Install command"""
     verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
     reinstalled, config = install(
         env_file=env_file,
         reinstall=reinstall,
         update_shebang=update_shebang,
-        verbose_level=verbose_level,
-        debug=debug)
+        verbose_level=verbose_level)
 
     if config is None:
         return 1
@@ -914,14 +951,13 @@ To activate the installation run:
     sys.exit(0)
 
 
-def cmd_uninstall(verbose_level=None, debug=None):
+def cmd_uninstall(verbose_level=None):
     """Uninstall command"""
     verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
     install_dir = get_install_dir()
     shutil.rmtree(install_dir, ignore_errors=True)
-    with Printer(verbose_level=verbose_level, debug=debug) as printer:
-        _update_box_header(printer, '/usr/bin/env python3')
+    with Output(verbose_level=verbose_level) as output:
+        _reset_box_header(output)
 
 
 def cmd_show(mode='text'):
@@ -940,13 +976,24 @@ def cmd_list(what='commands'):
     elif what == 'packages':
         for pkg in STATE['packages']:
             print(format_package_data(pkg))
+    elif what == 'environment':
+        for var_info in ENV_VARS.values():
+            if not var_info.description:
+                continue
+            dct = var_info._asdict()
+            var_type = dct['var_type']
+            dct['var_type_name'] = getattr(var_type, '__name__', str(var_type))
+            print("""\
+{var_name}: {description}
+  - type:    {var_type_name}
+  - value:   {var_value!r}
+  - default: {default!r}""".format(**dct))
 
 
-def cmd_run(command, args, verbose_level=None, debug=None, reinstall=False):
+def cmd_run(command, args, verbose_level=None, reinstall=False):
     """Run command"""
     verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
-    _, config = install(verbose_level=verbose_level, debug=debug, reinstall=reinstall)
+    _, config = install(verbose_level=verbose_level, reinstall=reinstall)
     if config is None:
         return 1
 
@@ -988,21 +1035,6 @@ def add_common_arguments(parser):
         help="set verbose level",
         **verbose_level_kwargs)
 
-    default_debug = get_debug()
-    debug_group = parser.add_argument_group("debug")
-    debug_mgrp = debug_group.add_mutually_exclusive_group()
-    debug_kwargs = {'dest': 'debug', 'default': default_debug}
-    debug_mgrp.add_argument(
-        "-d", "--debug",
-        action="store_true",
-        help="enable debug mode",
-        **debug_kwargs)
-    debug_mgrp.add_argument(
-        "-D", "--no-debug",
-        action="store_false",
-        help="disable debug mode",
-        **debug_kwargs)
-
 
 def add_reinstall_argument(parser):
     parser.add_argument(
@@ -1019,7 +1051,7 @@ Box {box_name!r} - configure box script
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_configure,
-        function_args=['install_dir', 'output_path', 'wrap_info', 'verbose_level', 'debug',
+        function_args=['install_dir', 'output_path', 'wrap_info', 'verbose_level',
                        'freeze', 'update_shebang'],
     )
     add_common_arguments(parser)
@@ -1113,11 +1145,11 @@ Box {box_name!r} - list available commands
         action="store_const", const="packages",
         help="list packages",
         **what_kwargs)
-    # what_mgrp.add_argument(
-    #     "-b", "--boxes",
-    #     action="store_const", const="boxes",
-    #     help="list installed boxes",
-    #     **what_kwargs)
+    what_mgrp.add_argument(
+        "-e", "--environment",
+        action="store_const", const="environment",
+        help="list bentobox environment variables",
+        **what_kwargs)
     return parser
 
 
@@ -1129,7 +1161,7 @@ Box {box_name!r} - run installed command
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_run,
-        function_args=['command', 'args', 'verbose_level', 'debug', 'reinstall'],
+        function_args=['command', 'args', 'verbose_level', 'reinstall'],
     )
     add_common_arguments(parser)
     add_reinstall_argument(parser)
@@ -1161,7 +1193,7 @@ Box {box_name!r} - extract archives
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_extract,
-        function_args=['output_dir', 'archives', 'verbose_level', 'debug'],
+        function_args=['output_dir', 'archives', 'verbose_level'],
     )
     add_common_arguments(parser)
     parser.add_argument(
@@ -1194,7 +1226,7 @@ Box {box_name!r} - install box
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_install,
-        function_args=['env_file', 'reinstall', 'verbose_level', 'debug', 'update_shebang'],
+        function_args=['env_file', 'reinstall', 'verbose_level', 'update_shebang'],
     )
     add_common_arguments(parser)
     add_reinstall_argument(parser)
@@ -1241,7 +1273,7 @@ Box {box_name!r} - uninstall box
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_uninstall,
-        function_args=['verbose_level', 'debug'],
+        function_args=['verbose_level'],
     )
     add_common_arguments(parser)
     return parser
@@ -1282,6 +1314,26 @@ def main(args=None):
     if args is None:
         args = sys.argv[1:]
 
+    if FORCE_REINSTALL or UNINSTALL:
+        config = get_config()
+        if config is None:
+            LOG.warning("%r is not installed", STATE['box_name'])
+        else:
+            cmd_uninstall()
+            LOG.warning("%r has been successfully uninstalled", STATE['box_name'])
+        if FORCE_REINSTALL:
+            if config is not None:
+                executable = __file__
+                cmdline = [executable] + list(args)
+                environ = get_environ(config)
+                environ.pop('BBOX_FORCE_REINSTALL', None)
+                return os.execve(executable, cmdline, environ)
+        else:
+            if args:
+                LOG.warning("command line arguments ignored: %s",
+                            " ".join(shlex.quote(arg) for arg in args))
+            sys.exit(0)
+
     wrap_info = get_wrap_info()
     if wrap_info.wrap_mode is WrapMode.SINGLE:
         return main_wrap_single(wrap_info.wraps, args)
@@ -1319,12 +1371,11 @@ Box {box_name} - manage box
 
     namespace = parser.parse_args(args)
     verbose_level = getattr(namespace, 'verbose_level', None)
-    debug = getattr(namespace, 'debug', None)
     trace = getattr(namespace, 'trace', False)
     function = namespace.function
     kwargs = {arg: getattr(namespace, arg) for arg in namespace.function_args}
 
-    configure_logging(verbose_level=verbose_level, debug=debug)
+    configure_logging(verbose_level=verbose_level)
     try:
         return function(**kwargs)
     except Exception as err:  # pylint: disable=broad-except
@@ -1335,7 +1386,6 @@ Box {box_name} - manage box
 
 
 def main_wrap_single(command, args):
-    configure_logging()
     _, config = install(reinstall=None)
     if config is None:
         return 1
@@ -1343,7 +1393,6 @@ def main_wrap_single(command, args):
 
 
 def main_wrap_multiple(commands, args):
-    configure_logging()
     _, config = install(reinstall=None)
     if config is None:
         return 1
@@ -1382,7 +1431,7 @@ def _wrap_command(config, command, args):
         print("""
   You can reconfigure the box with the following command:
 
-      $ BENTOBOX_WRAPPING=off {prog} configure --in-place -w COMMAND
+      $ BBOX_WRAPPING=off {prog} configure --in-place -w COMMAND
 
   where COMMAND is any installed command
 ################################################################################
