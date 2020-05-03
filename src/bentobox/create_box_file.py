@@ -92,7 +92,7 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
                     packages=(), pip_install_args=None,
                     update_shebang=True, check=True, freeze=True,
                     python_interpreter=DEFAULT_PYTHON_INTERPRETER,
-                    force_overwrite=False, verbose_level=1, debug=False):
+                    force_overwrite=False, verbose_level=1):
     # pylint: disable=too-many-arguments
     if wrap_info is None:
         wrap_info = box_file.WrapInfo(box_file.WrapMode.NONE, None)
@@ -146,7 +146,6 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
             "freeze": freeze,
             "update_shebang": update_shebang,
             "verbose_level": int(verbose_level),
-            "debug": bool(debug),
             "pip_install_args": pip_install_args,
             "packages": packages_data,
         }

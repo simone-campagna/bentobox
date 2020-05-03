@@ -39,15 +39,14 @@ def t_python_exe(value):
 def function_create(box_name, wrap_info, output_path,
                     packages, pip_install_args, update_shebang, check,
                     python_interpreter, force_overwrite, freeze,
-                    verbose_level, debug):
+                    verbose_level):
     # pylint: disable=too-many-arguments
     create_box_file(box_name, output_path=output_path, wrap_info=wrap_info,
                     pip_install_args=pip_install_args,
                     packages=packages, update_shebang=update_shebang,
                     check=check, python_interpreter=python_interpreter,
                     force_overwrite=force_overwrite, freeze=freeze,
-                    verbose_level=verbose_level,
-                    debug=debug)
+                    verbose_level=verbose_level)
 
 
 def function_show(box_path, mode="text"):
@@ -66,7 +65,7 @@ Create a box file
         function_args=['box_name', 'wrap_info', 'output_path', 'freeze',
                        'packages', 'pip_install_args', 'update_shebang',
                        'check', 'python_interpreter', 'force_overwrite',
-                       'verbose_level', 'debug'],
+                       'verbose_level']
     )
     default_verbose_level = 0
     verbose_level_group = parser.add_argument_group("verbose")
@@ -87,21 +86,6 @@ Create a box file
         type=int,
         help="set verbose level",
         **verbose_level_kwargs)
-
-    default_debug = False
-    debug_group = parser.add_argument_group("debug")
-    debug_mgrp = debug_group.add_mutually_exclusive_group()
-    debug_kwargs = {'dest': 'debug', 'default': default_debug}
-    debug_mgrp.add_argument(
-        "-d", "--debug",
-        action="store_true",
-        help="enable debug mode",
-        **debug_kwargs)
-    debug_mgrp.add_argument(
-        "-D", "--no-debug",
-        action="store_false",
-        help="disable debug mode",
-        **debug_kwargs)
 
     parser.add_argument(
         "-O", "--force-overwrite",

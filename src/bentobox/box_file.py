@@ -14,7 +14,6 @@
     "freeze": true,
     "update_shebang": true,
     "verbose_level": 0,
-    "debug": false,
     "pip_install_args": [],
     "packages": [
         {
@@ -134,20 +133,25 @@ HEADER_FILL_LEN = 20 * (80 + 1)
 _LOG_STATE = None
 
 
+# initial values:
 VERBOSE_LEVEL = 0
-DEBUG = False
-WRAPPING = True
 
 
-def configure_logging(verbose_level=None, debug=None):
+def get_verbose_level(verbose_level=None):
+    """Return verbose level"""
+    if verbose_level is None:
+        verbose_level = VERBOSE_LEVEL
+    return verbose_level
+
+
+def configure_logging(verbose_level=None):
     """Configure global logging"""
     verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
     global _LOG_STATE  # pylint: disable=global-statement
-    new_log_state = (verbose_level, debug)
+    new_log_state = verbose_level
     if _LOG_STATE == new_log_state:
         return
-    if debug or verbose_level >= 3:
+    if verbose_level >= 3:
         log_level = 'DEBUG'
     elif verbose_level >= 2:
         log_level = 'INFO'
@@ -183,16 +187,19 @@ def configure_logging(verbose_level=None, debug=None):
     _LOG_STATE = new_log_state
 
 
-EnvVar = collections.namedtuple(  # pylint: invalid-name
-    "EnvVar",
+configure_logging()
+
+
+VarInfo = collections.namedtuple(  # pylint: disable=invalid-name
+    "VarInfo",
     ["var_name", "var_type", "var_value", "default", "description"])
 
 ENV_VARS = {}
 
-def get_env(var_name, var_type=str, default=None, description=''):
+def get_env_var(var_name, var_type=str, default=None, description=None):
     """Get an environment variable"""
-    var_value = _get_env(var_name, var_type, default)
-    ENV_VARS[var_name] = EnvVar(
+    var_value = _get_env_var(var_name, var_type, default)
+    ENV_VARS[var_name] = VarInfo(
         var_name=var_name,
         var_type=var_type,
         var_value=var_value,
@@ -201,7 +208,7 @@ def get_env(var_name, var_type=str, default=None, description=''):
     return var_value
 
 
-def _get_env(var_name, var_type=str, default=None):
+def _get_env_var(var_name, var_type=str, default=None):
     """Get an environment variable"""
     value = os.environ.get(var_name, None)
     if value is None:
@@ -210,7 +217,6 @@ def _get_env(var_name, var_type=str, default=None):
         try:
             return var_type(value)
         except (ValueError, TypeError):
-            configure_logging()
             LOG.warning("%s=%r: invalid value", var_name, value)
             return default
 
@@ -225,36 +231,27 @@ def boolean(value):
     return bool(int(value))
 
 
-INSTALL_DIR = get_env("BBOX_INSTALL_DIR", var_type=Path, default=None,
-                      description="set install dir")
-WRAPPING = get_env("BBOX_WRAPPING", var_type=boolean, default=True,
-                      description="enable/disable wrapping")
-VERBOSE_LEVEL = get_env("BBOX_VERBOSE_LEVEL", var_type=int, default=STATE['verbose_level'],
-                      description="set verbose level")
-DEBUG = get_env("BBOX_DEBUG", var_type=boolean, default=STATE['debug'],
-                      description="enable/disable debug mode")
-FREEZE = get_env("BBOX_FREEZE", var_type=boolean, default=STATE['freeze'],
-                      description="enable/disable freezing virtualenv")
-UPDATE_SHEBANG = get_env("BBOX_UPDATE_SHEBANG", var_type=boolean, default=STATE['update_shebang'],
-                      description="enable/disable update of shebang")
-UNINSTALL = get_env("BBOX_UNINSTALL", var_type=boolean, default=False,
-                      description="force uninstall")
-FORCE_REINSTALL = get_env("BBOX_FORCE_REINSTALL", var_type=boolean, default=False,
-                      description="force reinstall")
-
-
-def get_verbose_level(verbose_level=None):
-    """Return verbose level"""
-    if verbose_level is None:
-        verbose_level = VERBOSE_LEVEL
-    return verbose_level
-
-
-def get_debug(debug=None):
-    """Return debug"""
-    if debug is None:
-        debug = DEBUG
-    return debug
+INSTALL_DIR = get_env_var(
+    "BBOX_INSTALL_DIR", var_type=Path, default=None,
+    description="set install dir")
+WRAPPING = get_env_var(
+    "BBOX_WRAPPING", var_type=boolean, default=True,
+    description="enable/disable wrapping")
+VERBOSE_LEVEL = get_env_var(
+    "BBOX_VERBOSE_LEVEL", var_type=int, default=STATE['verbose_level'],
+    description="set verbose level")
+FREEZE = get_env_var(
+    "BBOX_FREEZE", var_type=boolean, default=STATE['freeze'],
+    description="enable/disable freezing virtualenv")
+UPDATE_SHEBANG = get_env_var(
+    "BBOX_UPDATE_SHEBANG", var_type=boolean, default=STATE['update_shebang'],
+    description="enable/disable update of shebang")
+UNINSTALL = get_env_var(
+    "BBOX_UNINSTALL", var_type=boolean, default=False,
+    description="force uninstall")
+FORCE_REINSTALL = get_env_var(
+    "BBOX_FORCE_REINSTALL", var_type=boolean, default=False,
+    description="force reinstall")
 
 
 def default_install_dir():
@@ -414,15 +411,14 @@ def get_box_type(state=STATE):
 
 class Printer:
     """The printer context manager"""
-    def __init__(self, file=sys.stderr, header=HEADER, verbose_level=None, debug=None):
+    def __init__(self, file=sys.stderr, header=HEADER, verbose_level=None):
         verbose_level = get_verbose_level(verbose_level)
-        debug = get_debug(debug)
         self._file = file
         self._header = header
         self._prev_line = None
         self._verbose_level = verbose_level
-        self._debug = debug
-        self._enabled = self._verbose_level or self._debug
+        self._enabled = self._verbose_level > 0
+        self._persistent = self._verbose_level >= 2
 
     def __enter__(self):
         return self
@@ -433,18 +429,18 @@ class Printer:
     def clear(self):
         """Clear the last printed line"""
         if self._enabled:
-            if self._prev_line and not self._debug:
+            if self._prev_line and not self._persistent:
                 self._file.write('\r' + (' ' * len(self._prev_line)) + '\r')
                 self._file.flush()
             self._prev_line = None
 
-    def __call__(self, text, debug=None):
+    def __call__(self, text, persistent=None):
         if self._enabled:
             for text_line in text.split('\n'):
-                if debug is None:
-                    debug = self._debug
+                if persistent is None:
+                    persistent = self._persistent
                 line = self._header + text_line
-                if debug:
+                if persistent:
                     self._file.write(line + '\n')
                     self._prev_line = None
                 else:
@@ -454,14 +450,14 @@ class Printer:
                 self._file.flush()
 
     def run_command(self, cmdline, *args, raising=True, **kwargs):
-        debug = self._debug
+        persistent = self._persistent
         verbose_level = self._verbose_level
         result = subprocess.run(cmdline, *args, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, check=False, **kwargs)
         clist = [cmdline[0]] + [shlex.quote(arg) for arg in cmdline[1:]]
         cmd = " ".join(clist)
         kwargs = {}
-        if debug:
+        if persistent:
             self("$ " + cmd)
             if verbose_level > 2 or result.returncode:
                 self(str(result.stdout, 'utf-8'), **kwargs)
@@ -605,7 +601,7 @@ def _reset_box_header(printer):
 
 
 def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
-              verbose_level=UNDEFINED, debug=UNDEFINED, freeze=UNDEFINED,
+              verbose_level=UNDEFINED, freeze=UNDEFINED,
               update_shebang=UNDEFINED):
     """Change the STATE and update the file if necessary"""
     state = STATE.copy()
@@ -619,8 +615,6 @@ def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
         state['wraps'] = wrap_info.wraps
     if verbose_level is not UNDEFINED:
         state['verbose_level'] = verbose_level
-    if debug is not UNDEFINED:
-        state['debug'] = debug
     if freeze is not UNDEFINED:
         state['freeze'] = freeze
     if update_shebang is not UNDEFINED:
@@ -683,11 +677,11 @@ def _extract(printer, archives, output_dir):
     return archive_paths
 
 
-def extract(archives, output_dir=None, verbose_level=None, debug=None):
+def extract(archives, output_dir=None, verbose_level=None):
     """Extract archives with a given hash"""
     if output_dir is None:
         output_dir = get_install_dir() / 'boxes'
-    with Printer(verbose_level=verbose_level, debug=debug) as printer:
+    with Printer(verbose_level=verbose_level) as printer:
         return _extract(printer, archives, output_dir)
 
 
@@ -703,9 +697,8 @@ def check(install_dir=None):
         check_wrap_info(wrap_info)
 
 
-def install(env_file=None, reinstall=None, verbose_level=None, debug=None, update_shebang=None):
+def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=None):
     """Install the box, if needed"""
-    debug = get_debug(debug)
     if update_shebang is None:
         update_shebang = UPDATE_SHEBANG
 
@@ -768,7 +761,7 @@ def install(env_file=None, reinstall=None, verbose_level=None, debug=None, updat
             else:
                 do_install = False
 
-    with Printer(verbose_level=verbose_level, debug=debug) as printer:
+    with Printer(verbose_level=verbose_level) as printer:
 
         if do_install:
             def freeze_python(printer, venv_bin_dir, python_name):
@@ -896,34 +889,30 @@ Box: {box_name} [{box_type}]
 ################################################################################
 
 def cmd_configure(output_path, install_dir, wrap_info=UNDEFINED, update_shebang=UNDEFINED,
-                  verbose_level=UNDEFINED, debug=UNDEFINED, freeze=UNDEFINED):
+                  verbose_level=UNDEFINED, freeze=UNDEFINED):
     """Configure command"""
     return configure(output_path, install_dir, wrap_info=wrap_info,
-                     verbose_level=verbose_level, debug=debug,
+                     verbose_level=verbose_level,
                      update_shebang=update_shebang, freeze=freeze)
 
 
-def cmd_extract(archives, output_dir=None, verbose_level=None, debug=None):
+def cmd_extract(archives, output_dir=None, verbose_level=None):
     """Extract command"""
     verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
     extract(
         output_dir=output_dir,
         archives=archives,
-        verbose_level=verbose_level,
-        debug=debug)
+        verbose_level=verbose_level)
 
 
-def cmd_install(env_file, reinstall=False, update_shebang=None, verbose_level=None, debug=None):
+def cmd_install(env_file, reinstall=False, update_shebang=None, verbose_level=None):
     """Install command"""
     verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
     reinstalled, config = install(
         env_file=env_file,
         reinstall=reinstall,
         update_shebang=update_shebang,
-        verbose_level=verbose_level,
-        debug=debug)
+        verbose_level=verbose_level)
 
     if config is None:
         return 1
@@ -953,13 +942,12 @@ To activate the installation run:
     sys.exit(0)
 
 
-def cmd_uninstall(verbose_level=None, debug=None):
+def cmd_uninstall(verbose_level=None):
     """Uninstall command"""
     verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
     install_dir = get_install_dir()
     shutil.rmtree(install_dir, ignore_errors=True)
-    with Printer(verbose_level=verbose_level, debug=debug) as printer:
+    with Printer(verbose_level=verbose_level) as printer:
         _reset_box_header(printer)
 
 
@@ -980,7 +968,9 @@ def cmd_list(what='commands'):
         for pkg in STATE['packages']:
             print(format_package_data(pkg))
     elif what == 'environment':
-        for var_name, var_info in ENV_VARS.items():
+        for var_info in ENV_VARS.values():
+            if not var_info.description:
+                continue
             dct = var_info._asdict()
             var_type = dct['var_type']
             dct['var_type_name'] = getattr(var_type, '__name__', str(var_type))
@@ -991,11 +981,10 @@ def cmd_list(what='commands'):
   - default: {default!r}""".format(**dct))
 
 
-def cmd_run(command, args, verbose_level=None, debug=None, reinstall=False):
+def cmd_run(command, args, verbose_level=None, reinstall=False):
     """Run command"""
     verbose_level = get_verbose_level(verbose_level)
-    debug = get_debug(debug)
-    _, config = install(verbose_level=verbose_level, debug=debug, reinstall=reinstall)
+    _, config = install(verbose_level=verbose_level, reinstall=reinstall)
     if config is None:
         return 1
 
@@ -1037,21 +1026,6 @@ def add_common_arguments(parser):
         help="set verbose level",
         **verbose_level_kwargs)
 
-    default_debug = get_debug()
-    debug_group = parser.add_argument_group("debug")
-    debug_mgrp = debug_group.add_mutually_exclusive_group()
-    debug_kwargs = {'dest': 'debug', 'default': default_debug}
-    debug_mgrp.add_argument(
-        "-d", "--debug",
-        action="store_true",
-        help="enable debug mode",
-        **debug_kwargs)
-    debug_mgrp.add_argument(
-        "-D", "--no-debug",
-        action="store_false",
-        help="disable debug mode",
-        **debug_kwargs)
-
 
 def add_reinstall_argument(parser):
     parser.add_argument(
@@ -1068,7 +1042,7 @@ Box {box_name!r} - configure box script
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_configure,
-        function_args=['install_dir', 'output_path', 'wrap_info', 'verbose_level', 'debug',
+        function_args=['install_dir', 'output_path', 'wrap_info', 'verbose_level',
                        'freeze', 'update_shebang'],
     )
     add_common_arguments(parser)
@@ -1178,7 +1152,7 @@ Box {box_name!r} - run installed command
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_run,
-        function_args=['command', 'args', 'verbose_level', 'debug', 'reinstall'],
+        function_args=['command', 'args', 'verbose_level', 'reinstall'],
     )
     add_common_arguments(parser)
     add_reinstall_argument(parser)
@@ -1210,7 +1184,7 @@ Box {box_name!r} - extract archives
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_extract,
-        function_args=['output_dir', 'archives', 'verbose_level', 'debug'],
+        function_args=['output_dir', 'archives', 'verbose_level'],
     )
     add_common_arguments(parser)
     parser.add_argument(
@@ -1243,7 +1217,7 @@ Box {box_name!r} - install box
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_install,
-        function_args=['env_file', 'reinstall', 'verbose_level', 'debug', 'update_shebang'],
+        function_args=['env_file', 'reinstall', 'verbose_level', 'update_shebang'],
     )
     add_common_arguments(parser)
     add_reinstall_argument(parser)
@@ -1290,7 +1264,7 @@ Box {box_name!r} - uninstall box
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_uninstall,
-        function_args=['verbose_level', 'debug'],
+        function_args=['verbose_level'],
     )
     add_common_arguments(parser)
     return parser
@@ -1332,11 +1306,10 @@ def main(args=None):
         args = sys.argv[1:]
 
     if FORCE_REINSTALL or UNINSTALL:
-        configure_logging()
         config = get_config()
         if config is None:
             LOG.warning("%r is not installed", STATE['box_name'])
-        else:   
+        else:
             cmd_uninstall()
             LOG.warning("%r has been successfully uninstalled", STATE['box_name'])
         if FORCE_REINSTALL:
@@ -1389,12 +1362,11 @@ Box {box_name} - manage box
 
     namespace = parser.parse_args(args)
     verbose_level = getattr(namespace, 'verbose_level', None)
-    debug = getattr(namespace, 'debug', None)
     trace = getattr(namespace, 'trace', False)
     function = namespace.function
     kwargs = {arg: getattr(namespace, arg) for arg in namespace.function_args}
 
-    configure_logging(verbose_level=verbose_level, debug=debug)
+    configure_logging(verbose_level=verbose_level)
     try:
         return function(**kwargs)
     except Exception as err:  # pylint: disable=broad-except
@@ -1405,7 +1377,6 @@ Box {box_name} - manage box
 
 
 def main_wrap_single(command, args):
-    configure_logging()
     _, config = install(reinstall=None)
     if config is None:
         return 1
@@ -1413,7 +1384,6 @@ def main_wrap_single(command, args):
 
 
 def main_wrap_multiple(commands, args):
-    configure_logging()
     _, config = install(reinstall=None)
     if config is None:
         return 1
