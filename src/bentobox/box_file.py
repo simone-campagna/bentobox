@@ -4,7 +4,7 @@
 
 """
 {
-    "box_version": "0.0.1",
+    "box_version": "0.1.0",
     "box_name": "box-name",
     "python_interpreter": "/usr/bin/env python3",
     "python_interpreter_orig": null,
@@ -22,11 +22,11 @@
         },
         {
             "package_type": "archive",
-            "package_name": "prj-0.0.1.tar.gz"
+            "package_name": "prj-0.1.0.tar.gz"
         }
     ],
     "archives": {
-         "prj-0.0.1.tar.gz": "abcd0123"
+         "prj-0.1.0.tar.gz": "abcd0123"
     }
 }
 """
@@ -120,7 +120,7 @@ def load_state(json_data):
 STATE = load_state(__doc__)
 
 LOG = logging.getLogger(__name__)
-VERSION = '0.0.1'
+VERSION = '0.1.0'
 
 UNDEFINED = object()
 

@@ -23,7 +23,7 @@ from setuptools import setup, find_packages
 if __name__ == "__main__":
     setup(
         name="bentobox",
-        version='0.0.1',
+        version='0.1.0',
         requires=[],
         description="Self-installable python executables",
         author="Simone Campagna",
