@@ -38,6 +38,7 @@ import collections.abc
 import contextlib
 import enum
 import functools
+import io
 import json
 import logging
 import logging.config
@@ -409,16 +410,24 @@ def get_box_type(state=STATE):
 ### utils ######################################################################
 ################################################################################
 
-class Printer:
-    """The printer context manager"""
-    def __init__(self, file=sys.stderr, header=HEADER, verbose_level=None):
+class Output:
+    """Output context manager"""
+    def __init__(self, header=HEADER, verbose_level=None):
         verbose_level = get_verbose_level(verbose_level)
-        self._file = file
         self._header = header
         self._prev_line = None
         self._verbose_level = verbose_level
-        self._enabled = self._verbose_level > 0
-        self._persistent = self._verbose_level >= 2
+        if self._verbose_level > 0:
+            self._file = sys.stderr
+            self._persistent = self._verbose_level >= 2 or not self._file.isatty()
+            self._columns = None
+            if not self._persistent:
+                with contextlib.suppress(OSError):
+                    self._columns, _ = os.get_terminal_size()
+        else:
+            self._file = io.StringIO()
+            self._persistent = True
+            self._columns = None
 
     def __enter__(self):
         return self
@@ -428,26 +437,26 @@ class Printer:
 
     def clear(self):
         """Clear the last printed line"""
-        if self._enabled:
-            if self._prev_line and not self._persistent:
-                self._file.write('\r' + (' ' * len(self._prev_line)) + '\r')
-                self._file.flush()
-            self._prev_line = None
+        if self._prev_line and not self._persistent:
+            self._file.write('\r' + (' ' * len(self._prev_line)) + '\r')
+            self._file.flush()
+        self._prev_line = None
 
-    def __call__(self, text, persistent=None):
-        if self._enabled:
-            for text_line in text.split('\n'):
-                if persistent is None:
-                    persistent = self._persistent
-                line = self._header + text_line
-                if persistent:
-                    self._file.write(line + '\n')
-                    self._prev_line = None
-                else:
-                    self.clear()
-                    self._file.write(line)
-                    self._prev_line = line
-                self._file.flush()
+    def __call__(self, text):
+        persistent = self._persistent
+        columns = self._columns
+        for text_line in text.split('\n'):
+            line = self._header + text_line
+            if persistent:
+                self._file.write(line + '\n')
+                self._prev_line = None
+            else:
+                self.clear()
+                if columns is not None:
+                    line = line[:columns]
+                self._file.write(line)
+                self._prev_line = line
+            self._file.flush()
 
     def run_command(self, cmdline, *args, raising=True, **kwargs):
         persistent = self._persistent
@@ -573,13 +582,13 @@ def replace_state(output_path, state):
                     output_path_swp.rename(output_path)
 
 
-def _update_box_header(printer, python_interpreter):
+def _update_box_header(output, python_interpreter):
     """Update the box header in place"""
     if not UPDATE_SHEBANG:
         return
     if STATE['python_interpreter'] == python_interpreter:
         return
-    printer("replacing shebang...")
+    output("replacing shebang...")
     state = STATE.copy()
     if not state['python_interpreter_orig']:
         state['python_interpreter_orig'] = state['python_interpreter']
@@ -587,13 +596,13 @@ def _update_box_header(printer, python_interpreter):
     replace_state(__file__, state)
 
 
-def _reset_box_header(printer):
+def _reset_box_header(output):
     """Reset the box header in place"""
     if not UPDATE_SHEBANG:
         return
     if STATE['python_interpreter_orig'] is None:
         return
-    printer("resetting shebang...")
+    output("resetting shebang...")
     state = STATE.copy()
     state['python_interpreter'] = state['python_interpreter_orig']
     state['python_interpreter_orig'] = None
@@ -626,12 +635,12 @@ def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
 ### exported functions #########################################################
 ################################################################################
 
-def _extract(printer, archives, output_dir):
+def _extract(output, archives, output_dir):
     """Implementation of the extract function"""
     if not output_dir.is_dir():
-        printer("creating output dir {}...".format(output_dir))
+        output("creating output dir {}...".format(output_dir))
         output_dir.mkdir()
-    printer("reading archives from {}...".format(__file__))
+    output("reading archives from {}...".format(__file__))
     archive_paths = {}
     archive_path = None
     archive_file = None
@@ -661,7 +670,7 @@ def _extract(printer, archives, output_dir):
                         if not archive_path.parent.is_dir():
                             archive_path.parent.mkdir(parents=True)
                         archive_paths[archive_hash] = archive_path
-                        printer("extracting archive {} [{}]...".format(archive_name, archive_hash))
+                        output("extracting archive {} [{}]...".format(archive_name, archive_hash))
                         archive_file = open(archive_path, 'wb')
                         status = 'archive-data'
                     else:
@@ -681,8 +690,8 @@ def extract(archives, output_dir=None, verbose_level=None):
     """Extract archives with a given hash"""
     if output_dir is None:
         output_dir = get_install_dir() / 'boxes'
-    with Printer(verbose_level=verbose_level) as printer:
-        return _extract(printer, archives, output_dir)
+    with Output(verbose_level=verbose_level) as output:
+        return _extract(output, archives, output_dir)
 
 
 def check(install_dir=None):
@@ -761,13 +770,13 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=No
             else:
                 do_install = False
 
-    with Printer(verbose_level=verbose_level) as printer:
+    with Output(verbose_level=verbose_level) as output:
 
         if do_install:
-            def freeze_python(printer, venv_bin_dir, python_name):
+            def freeze_python(output, venv_bin_dir, python_name):
                 python_exe = venv_bin_dir / python_name
                 if python_exe.exists():
-                    printer("freezing python {}...".format(python_name))
+                    output("freezing python {}...".format(python_name))
                     if python_exe.is_symlink():
                         python_actual_exe = python_exe.resolve()
                         python_exe.unlink()
@@ -788,19 +797,19 @@ exec {python_exe} "$@"
 
             try:
                 if bentobox_config_file.exists():
-                    printer("removing install dir {}...".format(install_dir))
+                    output("removing install dir {}...".format(install_dir))
                     shutil.rmtree(install_dir, ignore_errors=True)
 
                 if not archives_dir.is_dir():
                     archives_dir.mkdir(parents=True)
 
-                archive_paths = _extract(printer, None, archives_dir)
+                archive_paths = _extract(output, None, archives_dir)
 
-                printer("creating virtualenv {}...".format(venv_dir))
+                output("creating virtualenv {}...".format(venv_dir))
                 venv.create(venv_dir, with_pip=True)
                 if FREEZE:
                     for python_name in 'python3', 'python':
-                        freeze_python(printer, venv_bin_dir, python_name)
+                        freeze_python(output, venv_bin_dir, python_name)
                 base_commands = set(find_executables(venv_bin_dir))
 
                 pip_path = venv_bin_dir / "pip"
@@ -812,21 +821,21 @@ exec {python_exe} "$@"
                     package_type = package_data['type']
                     package_name = package_data['name']
                     if package_type == 'package':
-                        printer("installing package {}...".format(package_name))
+                        output("installing package {}...".format(package_name))
                         cmdline = [str(pip_path), "install"] + pip_install_args + [package_name]
-                        printer.run_command(cmdline, env=environ)
+                        output.run_command(cmdline, env=environ)
                     elif package_type == 'archive':
                         archive_path = archive_paths[package_data['hash']]
-                        printer("installing package {}...".format(package_name))
+                        output("installing package {}...".format(package_name))
                         cmdline = [str(pip_path), "install"]
                         cmdline += pip_install_args
                         cmdline += [str(archive_path)]
-                        printer.run_command(cmdline, env=environ)
+                        output.run_command(cmdline, env=environ)
 
                 installed_commands = set(find_executables(venv_bin_dir)).difference(base_commands)
                 config["installed_commands"] = sorted(installed_commands)
 
-                printer("creating activate file {}...".format(bentobox_env_file))
+                output("creating activate file {}...".format(bentobox_env_file))
                 with open(bentobox_env_file, "w") as fhandle:
                     fhandle.write("""\
 # environment for box {box_name}
@@ -834,7 +843,7 @@ exec {python_exe} "$@"
 
 export PATH="${{PATH}}:{venv_bin_dir}"
 """.format(venv_bin_dir=venv_bin_dir, **STATE))
-                printer("creating config file {}...".format(bentobox_config_file))
+                output("creating config file {}...".format(bentobox_config_file))
                 with open(bentobox_config_file, "w") as fhandle:
                     print(json.dumps(tojson(config), indent=4, sort_keys=True), file=fhandle)
             except:  # pylint: disable=bare-except
@@ -842,7 +851,7 @@ export PATH="${{PATH}}:{venv_bin_dir}"
                 raise
 
         if env_file:
-            printer("copying env file to {}...".format(env_file))
+            output("copying env file to {}...".format(env_file))
             if not env_file.parent.is_dir():
                 env_file.parent.mkdir(parents=True)
             shutil.copyfile(bentobox_env_file, env_file)
@@ -854,7 +863,7 @@ export PATH="${{PATH}}:{venv_bin_dir}"
                 if python_exe.is_file():
                     python_interpreter = python_exe
                     break
-            _update_box_header(printer, str(python_interpreter))
+            _update_box_header(output, str(python_interpreter))
 
     if not do_install:
         config = get_config()
@@ -947,8 +956,8 @@ def cmd_uninstall(verbose_level=None):
     verbose_level = get_verbose_level(verbose_level)
     install_dir = get_install_dir()
     shutil.rmtree(install_dir, ignore_errors=True)
-    with Printer(verbose_level=verbose_level) as printer:
-        _reset_box_header(printer)
+    with Output(verbose_level=verbose_level) as output:
+        _reset_box_header(output)
 
 
 def cmd_show(mode='text'):
