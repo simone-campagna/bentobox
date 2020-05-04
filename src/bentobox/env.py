@@ -7,6 +7,7 @@ from pathlib import Path
 
 __all__ = [
     'DEFAULT_PYTHON_INTERPRETER',
+    'INIT_VENV_PACKAGES',
     'get_bentobox_version',
     'get_bentobox_home',
     'get_bentobox_boxes_dir',
@@ -14,6 +15,7 @@ __all__ = [
 
 
 DEFAULT_PYTHON_INTERPRETER = '/usr/bin/env python3'
+INIT_VENV_PACKAGES = ('setuptools', 'pip')
 
 BENTOBOX_VERSION = '0.1.0'
 

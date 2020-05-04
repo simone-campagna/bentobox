@@ -37,12 +37,13 @@ def t_python_exe(value):
 
 
 def function_create(box_name, wrap_info, output_path,
-                    packages, pip_install_args, update_shebang, check,
+                    packages, update_shebang, check,
                     python_interpreter, force_overwrite, freeze,
-                    verbose_level):
+                    verbose_level, pip_install_args, download):
     # pylint: disable=too-many-arguments
     create_box_file(box_name, output_path=output_path, wrap_info=wrap_info,
                     pip_install_args=pip_install_args,
+                    download=download,
                     packages=packages, update_shebang=update_shebang,
                     check=check, python_interpreter=python_interpreter,
                     force_overwrite=force_overwrite, freeze=freeze,
@@ -63,8 +64,8 @@ Create a box file
     parser.set_defaults(
         function=function_create,
         function_args=['box_name', 'wrap_info', 'output_path', 'freeze',
-                       'packages', 'pip_install_args', 'update_shebang',
-                       'check', 'python_interpreter', 'force_overwrite',
+                       'packages', 'update_shebang', 'check', 'python_interpreter',
+                       'force_overwrite', 'pip_install_args', 'download',
                        'verbose_level']
     )
     default_verbose_level = 0
@@ -180,6 +181,12 @@ Create a box file
         type=t_box_name,
         required=True,
         help="box name")
+
+    parser.add_argument(
+        "-d", "--download",
+        default=False,
+        action="store_true",
+        help="download packages from PyPI along with their dependencies")
 
     parser.add_argument(
         "packages",
