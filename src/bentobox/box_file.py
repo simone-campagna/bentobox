@@ -5,6 +5,7 @@
 """
 {
     "box_version": "0.1.0",
+    "box_file_version": 1,
     "box_name": "box-name",
     "python_interpreter": "/usr/bin/env python3",
     "python_interpreter_orig": null,
@@ -15,18 +16,19 @@
     "update_shebang": true,
     "verbose_level": 0,
     "pip_install_args": [],
-    "packages": [
-        {
-            "package_type": "package",
-            "package_name": "numpy"
-        },
-        {
-            "package_type": "archive",
-            "package_name": "prj-0.1.0.tar.gz"
-        }
+    "use_pypi": true,
+    "init_venv_packages": [
+        "setuptools",
+        "pip"
     ],
-    "archives": {
-         "prj-0.1.0.tar.gz": "abcd0123"
+    "packages": [
+        "pkg1",
+        "pkg2"
+    ],
+    "repo": {
+         "pkg2": {
+             "pkg2-0.2.1.tar.gz": "abcd0123"
+          }
     }
 }
 """
@@ -37,6 +39,7 @@ import argparse
 import collections.abc
 import contextlib
 import enum
+import fcntl
 import functools
 import io
 import json
@@ -58,7 +61,7 @@ from pathlib import Path
 __all__ = [
     'MARK_END_OF_HEADER',
     'MARK_END_OF_SOURCE',
-    'MARK_ARCHIVES',
+    'MARK_REPO',
     'HEADER_FILL_LEN',
     'WrapMode',
     'WrapInfo',
@@ -79,6 +82,10 @@ class BoxError(Exception):
 
 
 class BoxInternalError(Exception):
+    pass
+
+
+class BoxFileVersionMismatch(Exception):
     pass
 
 
@@ -128,7 +135,7 @@ HEADER = "[BENTOBOX] "
 
 MARK_END_OF_HEADER = "# --- end-of-header ---"
 MARK_END_OF_SOURCE = "# --- end-of-source ---"
-MARK_ARCHIVES = "# --- archives ---"
+MARK_REPO = "# --- repo ---"
 HEADER_FILL_LEN = 20 * (80 + 1)
 
 _LOG_STATE = None
@@ -137,6 +144,7 @@ _LOG_STATE = None
 # initial values:
 VERBOSE_LEVEL = 0
 
+DEBUG_LEVEL = 3
 
 def get_verbose_level(verbose_level=None):
     """Return verbose level"""
@@ -152,7 +160,7 @@ def configure_logging(verbose_level=None):
     new_log_state = verbose_level
     if _LOG_STATE == new_log_state:
         return
-    if verbose_level >= 3:
+    if verbose_level >= DEBUG_LEVEL:
         log_level = 'DEBUG'
     elif verbose_level >= 2:
         log_level = 'INFO'
@@ -165,7 +173,7 @@ def configure_logging(verbose_level=None):
         'version': 1,
         'formatters': {
             'standard': {
-                'format': '# %(levelname)-10s %(message)s',
+                'format': '<BENTOBOX> %(levelname)-10s %(message)s',
                 'datefmt': '%Y%m%d %H:%M:%S',
             }
         },
@@ -253,6 +261,9 @@ UNINSTALL = get_env_var(
 FORCE_REINSTALL = get_env_var(
     "BBOX_FORCE_REINSTALL", var_type=boolean, default=False,
     description="force reinstall")
+
+
+configure_logging(VERBOSE_LEVEL)
 
 
 def default_install_dir():
@@ -384,9 +395,9 @@ def create_header(state, fill_len=None):
     return header
 
 
-def get_archives():
-    """Return [(archive_hash, archive_name)...]"""
-    return [(pkg['hash'], pkg['name']) for pkg in STATE['packages'] if pkg['type'] == 'archive']
+def get_repo():
+    """Return the repo"""
+    return STATE['repo']
 
 
 def _fmt_command(command):
@@ -500,6 +511,43 @@ def set_write_mode(filename):
             filename.chmod(old_mode)
 
 
+@contextlib.contextmanager
+def lockfile(filepath=None):
+    """Lock file contex tmanager"""
+    if filepath is None:
+        install_dir = get_install_dir()
+        pdir = install_dir.parent
+        if not pdir.is_dir():
+            pdir.mkdir(parents=True)
+        filepath = pdir.joinpath("." + install_dir.name + ".bentobox.lock")
+    pid = os.getpid()
+    fhandle = open(filepath, 'w+')
+    try:
+        LOG.debug("waiting for lock %s...", filepath)
+        fcntl.lockf(fhandle.fileno(), fcntl.LOCK_EX)
+        LOG.debug("lock %s acquired", filepath)
+        fhandle.write("{}\n".format(pid))
+        yield filepath
+    finally:
+        fcntl.lockf(fhandle.fileno(), fcntl.LOCK_UN)
+        LOG.debug("lock %s released", filepath)
+        fhandle.close()
+        if filepath.exists():
+            LOG.debug("removing lock %s", filepath)
+            filepath.unlink()
+        else:
+            LOG.debug("lock %s has gone!", filepath)
+
+
+def locked(function):
+    """Locked decorator"""
+    @functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        with lockfile():
+            return function(*args, **kwargs)
+    return wrapped
+
+
 def get_header_len(output_path):
     """Get the header length"""
     header_len = 0
@@ -509,15 +557,6 @@ def get_header_len(output_path):
                 break
             header_len += len(line)
     return header_len
-
-
-def format_package_data(package_data):
-    """Return formatted package"""
-    fmtd = {
-        'package': '{type} {name}',
-        'archive': '{type} {hash} [{name}]',
-    }
-    return fmtd[package_data['type']].format(**package_data)
 
 
 def filler(fill_len, line_len=80):
@@ -535,6 +574,7 @@ def filler(fill_len, line_len=80):
         return ''
 
 
+@locked
 def replace_state(output_path, state):
     """Replace the box state"""
     output_path = Path(output_path)
@@ -635,63 +675,128 @@ def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
 ### exported functions #########################################################
 ################################################################################
 
-def _extract(output, archives, output_dir):
+MAIN_INDEX_SOURCE = """\
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>
+      Simple Index
+    </title>
+    <meta name='api-version' value='2' />
+  </head>
+  <body>
+{content}
+  </body>
+</html>
+"""
+
+PACKAGE_REF_SOURCE = '''    <a href="{package_name}/">{package_name}</a>'''
+
+
+PACKAGE_INDEX_SOURCE = """\
+<!DOCTYPE html>
+<html>
+  <body>
+    <a href="{package_filename}">{package_filename}</a><br />
+  </body>
+</html>
+"""
+
+
+def build_pypi_simple(repo_dir, package_data, pypi_dir=None):
+    repo_dir = Path(repo_dir).resolve()
+    if pypi_dir is None:
+        pypi_dir = repo_dir / 'simple'
+    shutil.rmtree(pypi_dir, ignore_errors=True)
+    pypi_dir.mkdir(parents=True)
+    pypi_index_path = pypi_dir / 'index.html'
+    content = []
+    for package_name, package_filename, _ in package_data:
+        content.append(PACKAGE_REF_SOURCE.format(package_name=package_name))
+        package_path = repo_dir / package_filename
+        package_dir = pypi_dir / package_name
+        if not package_dir.is_dir():
+            package_dir.mkdir(parents=True)
+        package_link_path = package_dir / package_path.name
+        package_link_path.symlink_to(Path("..") / ".." / package_path.name)
+        package_index_path = package_dir / 'index.html'
+        with open(package_index_path, "w") as package_index_file:
+            package_index_file.write(
+                PACKAGE_INDEX_SOURCE.format(package_filename=package_filename)
+            )
+    with open(pypi_index_path, "w") as pypi_index_file:
+        pypi_index_file.write(MAIN_INDEX_SOURCE.format(
+            content='\n'.join(content)
+        ))
+    return pypi_dir
+
+
+def _extract(output, hashlist, output_dir):
     """Implementation of the extract function"""
     if not output_dir.is_dir():
         output("creating output dir {}...".format(output_dir))
         output_dir.mkdir()
-    output("reading archives from {}...".format(__file__))
-    archive_paths = {}
-    archive_path = None
-    archive_file = None
-    if archives is None:
-        archives = [value[0] for value in get_archives()]
-    archives = set(archives)
+    output("reading repo packages from {}...".format(__file__))
+    package_data = []
+    package_filename = None
+    package_name = None
+    package_hash = None
+    package_file = None
+    if hashlist is None:
+        hashlist = []
+        for package_dct in get_repo().values():
+            for package_hash in package_dct.values():
+                hashlist.append(package_hash)
+    hashset = set(hashlist)
     try:
         with open(__file__, "r") as source_file:
             for line in source_file:
-                if line.startswith(MARK_ARCHIVES):
+                if line.startswith(MARK_REPO):
                     break
-            status = 'archive-name'
+            status = 'package-name'
             for line in source_file:
                 src = line[1:-1]
                 if not src:
-                    status = 'archive-name'
+                    status = 'package-name'
                     continue
-                if status == 'archive-name':
-                    archive_name = src
-                    status = 'archive-hash'
-                elif status == 'archive-hash':
-                    archive_hash = src
-                    if archive_hash in archives:
-                        if archive_file:
-                            archive_file.close()
-                        archive_path = output_dir / archive_hash / archive_name
-                        if not archive_path.parent.is_dir():
-                            archive_path.parent.mkdir(parents=True)
-                        archive_paths[archive_hash] = archive_path
-                        output("extracting archive {} [{}]...".format(archive_name, archive_hash))
-                        archive_file = open(archive_path, 'wb')
-                        status = 'archive-data'
+                if status == 'package-name':
+                    package_name = src
+                    status = 'package-filename'
+                elif status == 'package-filename':
+                    package_filename = src
+                    status = 'package-hash'
+                elif status == 'package-hash':
+                    package_hash = src
+                    if package_hash in hashset:
+                        if package_file:
+                            package_file.close()
+                        package_path = output_dir / package_filename
+                        if not package_path.parent.is_dir():
+                            package_path.parent.mkdir(parents=True)
+                        package_data.append((package_name, package_filename, package_hash))
+                        output("extracting package {} [{}]...".format(
+                            package_filename, package_hash))
+                        package_file = open(package_path, 'wb')
+                        status = 'package-data'
                     else:
                         status = 'skip'
-                elif status == 'archive-data':
+                elif status == 'package-data':
                     data = b64decode(src)
-                    archive_file.write(data)
+                    package_file.write(data)
                 elif status == 'skip':
                     pass
     finally:
-        if archive_file:
-            archive_file.close()
-    return archive_paths
+        if package_file:
+            package_file.close()
+    return build_pypi_simple(output_dir, package_data)
 
 
-def extract(archives, output_dir=None, verbose_level=None):
-    """Extract archives with a given hash"""
+def extract(hashlist, output_dir=None, verbose_level=None):
+    """Extract packages with given hash"""
     if output_dir is None:
         output_dir = get_install_dir() / 'boxes'
     with Output(verbose_level=verbose_level) as output:
-        return _extract(output, archives, output_dir)
+        return _extract(output, hashlist, output_dir)
 
 
 def check(install_dir=None):
@@ -706,6 +811,7 @@ def check(install_dir=None):
         check_wrap_info(wrap_info)
 
 
+@locked
 def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=None):
     """Install the box, if needed"""
     if update_shebang is None:
@@ -713,7 +819,7 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=No
 
     install_dir = get_install_dir()
 
-    archives_dir = install_dir / "archives"
+    repo_dir = install_dir / "repo"
     bentobox_config_file = install_dir / "bentobox-config.json"
     bentobox_env_file = install_dir / "bentobox-env.sh"
 
@@ -723,10 +829,11 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=No
         env_file = env_file.resolve()
         source_file = env_file
 
-    venv_dir = install_dir / "virtualenv"
+    venv_dir = install_dir / "venv"
     venv_bin_dir = venv_dir / "bin"
     config = {
-        'version': VERSION,
+        'box_version': VERSION,
+        'box_file_version': STATE['box_file_version'],
         'install_dir': install_dir,
         'env_file': env_file,
         'source_file': source_file,
@@ -737,13 +844,17 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=No
     }
 
     do_install = True
-    if bentobox_config_file.exists():
-        with open(bentobox_config_file, "r") as fconfig:
-            installed_config = json.load(fconfig)
+    installed_config = get_config()
+    if installed_config is not None:
         if reinstall:
             LOG.warning("reinstalling box %s...", STATE['box_name'])
             do_install = True
         else:
+            installed_box_file_version = installed_config.get('box_file_version', 0)
+            if installed_box_file_version != STATE['box_file_version']:
+                raise BoxFileVersionMismatch("installed version: {} current version: {}".format(
+                    installed_box_file_version,
+                    STATE['box_file_version']))
             installed_packages = installed_config['packages']
             configured_packages = STATE['packages']
             num_common_packages = 0
@@ -760,7 +871,7 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=No
                             pre = '='
                         else:
                             pre = '!'
-                        LOG.debug("  %s %s", pre, format_package_data(pkg))
+                        LOG.debug("  %s %s", pre, pkg)
                 if reinstall is None:
                     LOG.warning("already installed, but reinstall is needed")
                     do_install = True
@@ -800,12 +911,12 @@ exec {python_exe} "$@"
                     output("removing install dir {}...".format(install_dir))
                     shutil.rmtree(install_dir, ignore_errors=True)
 
-                if not archives_dir.is_dir():
-                    archives_dir.mkdir(parents=True)
+                if not repo_dir.is_dir():
+                    repo_dir.mkdir(parents=True)
 
-                archive_paths = _extract(output, None, archives_dir)
+                pypi_dir = _extract(output, None, repo_dir)
 
-                output("creating virtualenv {}...".format(venv_dir))
+                output("creating venv {}...".format(venv_dir))
                 venv.create(venv_dir, with_pip=True)
                 if FREEZE:
                     for python_name in 'python3', 'python':
@@ -816,21 +927,24 @@ exec {python_exe} "$@"
 
                 environ = get_environ(config)
 
-                pip_install_args = list(STATE['pip_install_args'])
-                for package_data in STATE['packages']:
-                    package_type = package_data['type']
-                    package_name = package_data['name']
-                    if package_type == 'package':
-                        output("installing package {}...".format(package_name))
-                        cmdline = [str(pip_path), "install"] + pip_install_args + [package_name]
-                        output.run_command(cmdline, env=environ)
-                    elif package_type == 'archive':
-                        archive_path = archive_paths[package_data['hash']]
-                        output("installing package {}...".format(package_name))
-                        cmdline = [str(pip_path), "install"]
-                        cmdline += pip_install_args
-                        cmdline += [str(archive_path)]
-                        output.run_command(cmdline, env=environ)
+                if STATE['use_pypi']:
+                    pip_index_options = ["--extra-index-url", "file://" + str(pypi_dir)]
+                else:
+                    pip_index_options = ["--index-url", "file://" + str(pypi_dir)]
+
+                output("initializing venv...")
+                pip_cmdline = [str(pip_path), "install", "--upgrade"]
+                pip_cmdline += pip_index_options
+                pip_cmdline += STATE['init_venv_packages']
+                output.run_command(pip_cmdline, env=environ)
+
+                installed_commands = set(find_executables(venv_bin_dir)).difference(base_commands)
+                output("installing packages...")
+                pip_cmdline = [str(pip_path), "install"]
+                pip_cmdline.extend(str(arg) for arg in STATE['pip_install_args'])
+                pip_cmdline += pip_index_options
+                pip_cmdline += STATE['packages']
+                output.run_command(pip_cmdline, env=environ)
 
                 installed_commands = set(find_executables(venv_bin_dir)).difference(base_commands)
                 config["installed_commands"] = sorted(installed_commands)
@@ -888,9 +1002,14 @@ Box: {box_name} [{box_type}]
   + pip_install_args = {pip_install_args}
   + update_shebang = {update_shebang}
   + packages:""".format(actual_install_dir=actual_install_dir, box_type=box_type, **STATE))
-        for package_data in STATE['packages']:
-            print("""\
-    - {}""".format(format_package_data(package_data)))
+        for package_name in STATE['packages']:
+            print("    + {}".format(package_name))
+        print("""\
+  + repo:""")
+        for package_name, package_data in STATE['repo'].items():
+            print("    + {}".format(package_name))
+            for package_path, package_hash in package_data.items():
+                print("      + {}: {}".format(package_hash, package_path))
 
 
 ################################################################################
@@ -905,12 +1024,12 @@ def cmd_configure(output_path, install_dir, wrap_info=UNDEFINED, update_shebang=
                      update_shebang=update_shebang, freeze=freeze)
 
 
-def cmd_extract(archives, output_dir=None, verbose_level=None):
+def cmd_extract(hashlist, output_dir=None, verbose_level=None):
     """Extract command"""
     verbose_level = get_verbose_level(verbose_level)
     extract(
         output_dir=output_dir,
-        archives=archives,
+        hashlist=hashlist,
         verbose_level=verbose_level)
 
 
@@ -974,8 +1093,13 @@ def cmd_list(what='commands'):
         for command in sorted(find_executables(config["venv_bin_dir"])):
             print(command)
     elif what == 'packages':
-        for pkg in STATE['packages']:
-            print(format_package_data(pkg))
+        for package_name in STATE['packages']:
+            print(package_name)
+    elif what == 'repo':
+        for package_name, package_data in STATE['repo'].items():
+            print(package_name)
+            for package_filename, package_hash in package_data.items():
+                print("  {}: {}".format(package_hash, package_filename))
     elif what == 'environment':
         for var_info in ENV_VARS.values():
             if not var_info.description:
@@ -1146,6 +1270,11 @@ Box {box_name!r} - list available commands
         help="list packages",
         **what_kwargs)
     what_mgrp.add_argument(
+        "-r", "--repo",
+        action="store_const", const="repo",
+        help="list repo content",
+        **what_kwargs)
+    what_mgrp.add_argument(
         "-e", "--environment",
         action="store_const", const="environment",
         help="list bentobox environment variables",
@@ -1176,11 +1305,13 @@ Box {box_name!r} - run installed command
 
 
 def add_extract_parser(subparsers):
-    def archive_hash(value):
+    def package_hash(value):
         matching_entries = []
-        for archive_hash, archive_name in get_archives():
-            if archive_name == value or archive_hash.startswith(value):
-                matching_entries.append(archive_hash)
+        for package_name, package_data in get_repo().items():
+            for package_filename, package_hash in package_data.items():
+                if (package_filename == value or package_name == value or
+                        package_hash.startswith(value)):
+                    matching_entries.append(package_hash)
         if len(matching_entries) == 1:
             return matching_entries[0]
         else:
@@ -1189,11 +1320,11 @@ def add_extract_parser(subparsers):
     parser = subparsers.add_parser(
         "extract",
         description="""\
-Box {box_name!r} - extract archives
+Box {box_name!r} - extract packages and create a PyPI repo
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_extract,
-        function_args=['output_dir', 'archives', 'verbose_level'],
+        function_args=['output_dir', 'hashlist', 'verbose_level'],
     )
     add_common_arguments(parser)
     parser.add_argument(
@@ -1201,20 +1332,20 @@ Box {box_name!r} - extract archives
         type=Path,
         default=None,
         help="output dir")
-    archives_group = parser.add_argument_group("archives")
-    archives_mgrp = archives_group.add_mutually_exclusive_group(required=True)
-    archives_kwargs = {'dest': 'archives', 'default': []}
-    archives_mgrp.add_argument(
-        "-a", "--archives",
-        type=archive_hash,
+    hashlist_group = parser.add_argument_group("packages")
+    hashlist_mgrp = hashlist_group.add_mutually_exclusive_group(required=True)
+    hashlist_kwargs = {'dest': 'hashlist', 'default': []}
+    hashlist_mgrp.add_argument(
+        "-p", "--package",
+        type=package_hash,
         action="append",
-        help="archive name or hash",
-        **archives_kwargs)
-    archives_mgrp.add_argument(
+        help="package name or hash",
+        **hashlist_kwargs)
+    hashlist_mgrp.add_argument(
         "-A", "--all",
         action="store_const", const=None,
-        help="extract all archives",
-        **archives_kwargs)
+        help="extract all packages",
+        **hashlist_kwargs)
     return parser
 
 
@@ -1311,38 +1442,44 @@ Box {box_name!r} - show box state
 ################################################################################
 
 def main(args=None):
-    if args is None:
-        args = sys.argv[1:]
+    try:
+        if args is None:
+            args = sys.argv[1:]
 
-    if FORCE_REINSTALL or UNINSTALL:
-        config = get_config()
-        if config is None:
-            LOG.warning("%r is not installed", STATE['box_name'])
-        else:
-            cmd_uninstall()
-            LOG.warning("%r has been successfully uninstalled", STATE['box_name'])
-        if FORCE_REINSTALL:
-            if config is not None:
-                executable = __file__
-                cmdline = [executable] + list(args)
-                environ = get_environ(config)
-                environ.pop('BBOX_FORCE_REINSTALL', None)
-                return os.execve(executable, cmdline, environ)
-        else:
-            if args:
-                LOG.warning("command line arguments ignored: %s",
-                            " ".join(shlex.quote(arg) for arg in args))
-            sys.exit(0)
+        if FORCE_REINSTALL or UNINSTALL:
+            config = get_config()
+            if config is None:
+                LOG.warning("%r is not installed", STATE['box_name'])
+            else:
+                cmd_uninstall()
+                LOG.warning("%r has been successfully uninstalled", STATE['box_name'])
+            if FORCE_REINSTALL:
+                if config is not None:
+                    executable = __file__
+                    cmdline = [executable] + list(args)
+                    environ = get_environ(config)
+                    environ.pop('BBOX_FORCE_REINSTALL', None)
+                    return os.execve(executable, cmdline, environ)
+            else:
+                if args:
+                    LOG.warning("command line arguments ignored: %s",
+                                " ".join(shlex.quote(arg) for arg in args))
+                sys.exit(0)
 
-    wrap_info = get_wrap_info()
-    if wrap_info.wrap_mode is WrapMode.SINGLE:
-        return main_wrap_single(wrap_info.wraps, args)
-    elif wrap_info.wrap_mode is WrapMode.MULTIPLE:
-        return main_wrap_multiple(wrap_info.wraps, args)
-    elif wrap_info.wrap_mode is WrapMode.ALL:
-        return main_wrap_multiple(None, args)
-    else:
-        return main_box(args)
+        wrap_info = get_wrap_info()
+        if wrap_info.wrap_mode is WrapMode.SINGLE:
+            return main_wrap_single(wrap_info.wraps, args)
+        elif wrap_info.wrap_mode is WrapMode.MULTIPLE:
+            return main_wrap_multiple(wrap_info.wraps, args)
+        elif wrap_info.wrap_mode is WrapMode.ALL:
+            return main_wrap_multiple(None, args)
+        else:
+            return main_box(args)
+    except Exception as err:  # pylint: disable=broad-except
+        if VERBOSE_LEVEL >= DEBUG_LEVEL:
+            LOG.exception("exception found:")
+        else:
+            LOG.error("%s: %s", type(err).__name__, err)
 
 
 def main_box(args=None):
@@ -1448,4 +1585,4 @@ if __name__ == "__main__":
     main()
 
 # --- end-of-source ---
-# --- archives ---
+# --- repo ---
