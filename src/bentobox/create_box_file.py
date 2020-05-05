@@ -53,6 +53,10 @@ class BoxFileError(BoxCreateError):
     pass
 
 
+class BoxInvalidPackageName(BoxCreateError):
+    pass
+
+
 RE_BOX_NAME = re.compile(r"^\w+(?:\-\w+)*$")
 
 
@@ -87,13 +91,12 @@ def run_command(cmdline, raising=True):
             print("$ {}".format(cmd), file=sys.stderr)
             print(result.stdout, file=sys.stderr)
             raise BoxCommandError("command {} failed".format(cmd))
-        else:
-            print("ERR: command {} failed:".format(cmd), file=sys.stderr)
-            print(result.stdout, file=sys.stderr)
+        print("ERR: command {} failed:".format(cmd), file=sys.stderr)
+        print(result.stdout, file=sys.stderr)
     return result.returncode
 
 
-class PackageRepo(object):
+class PackageRepo:
     def __init__(self, tmpdir):
         self.tmpdir = tmpdir
         self.package_names = []
@@ -115,13 +118,13 @@ class PackageRepo(object):
             old_cwd = Path.cwd()
             try:
                 os.chdir(setup_py_path.parent)
-                cmdline = [sys.executable, str(setup_py_path), "sdist", "--dist-dir", str(pkg_tmpdir)]
-                
+                cmdline = [sys.executable, str(setup_py_path), "sdist",
+                           "--dist-dir", str(pkg_tmpdir)]
                 run_command(cmdline)
             finally:
                 os.chdir(old_cwd)
-            for package_path in pkg_tmpdir.glob("*"):
-                yield package_path
+            for pkg_path in pkg_tmpdir.glob("*"):
+                yield pkg_path
 
     def add_packages(self, packages):
         package_names = []
@@ -152,15 +155,16 @@ class PackageRepo(object):
             for ddir in download_dir, build_dir, src_dir:
                 if not ddir.is_dir():
                     ddir.mkdir(parents=True)
-            cmdline = ['pip', 'download',
-                       '--only-binary', ':all:',
-                       '--dest', str(download_dir),
-                       '--build', str(build_dir),
-                       '--src', str(src_dir),
-                       '--platform', 'any',
-                       '--python-version', '3',
-                       '--implementation', 'py',
-                       '--abi', 'none',
+            cmdline = [
+                'pip', 'download',
+                '--only-binary', ':all:',
+                '--dest', str(download_dir),
+                '--build', str(build_dir),
+                '--src', str(src_dir),
+                '--platform', 'any',
+                '--python-version', '3',
+                '--implementation', 'py',
+                '--abi', 'none',
             ]
             for package in self.package_names:
                 cmdline.append(str(package))
@@ -174,7 +178,7 @@ class PackageRepo(object):
                 if package_path is not None:
                     package_paths.append((package_name, package_path))
         return package_paths
-        
+
 
 def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
                     packages=(), init_venv_packages=None,

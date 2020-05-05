@@ -39,13 +39,13 @@ import argparse
 import collections.abc
 import contextlib
 import enum
+import fcntl
 import functools
 import io
 import json
 import logging
 import logging.config
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -69,7 +69,6 @@ __all__ = [
     'wrap_multiple',
     'create_header',
     'replace_state',
-    'get_package_name',
     'show',
     'check',
     'install',
@@ -504,6 +503,40 @@ def set_write_mode(filename):
             filename.chmod(old_mode)
 
 
+@contextlib.contextmanager
+def lockfile(filepath=None):
+    """Lock file contex tmanager"""
+    if filepath is None:
+        install_dir = get_install_dir()
+        pdir = install_dir.parent
+        if not pdir.is_dir():
+            pdir.mkdir(parents=True)
+        filepath = pdir.joinpath("." + install_dir.name + ".bentobox.lock")
+    pid = os.getpid()
+    with Output() as output:
+        with open(filepath, 'w+') as fhandle:
+            try:
+                output("[{}]: waiting for lock {}...".format(pid, filepath))
+                fcntl.lockf(fhandle.fileno(), fcntl.LOCK_EX)
+                output("[{}]: lock {} acquired".format(pid, filepath))
+                fhandle.write("{}\n".format(pid))
+                yield filepath
+            finally:
+                fcntl.lockf(fhandle.fileno(), fcntl.LOCK_UN)
+        if filepath.is_file():
+            output("[{}]: removing lock {}".format(pid, filepath))
+            filepath.unlink()
+
+
+def locked(function):
+    """Locked decorator"""
+    @functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        with lockfile():
+            return function(*args, **kwargs)
+    return wrapped
+
+
 def get_header_len(output_path):
     """Get the header length"""
     header_len = 0
@@ -530,6 +563,7 @@ def filler(fill_len, line_len=80):
         return ''
 
 
+@locked
 def replace_state(output_path, state):
     """Replace the box state"""
     output_path = Path(output_path)
@@ -649,7 +683,7 @@ def create_pypi_simple(repo_dir, package_data, pypi_dir=None):
   </head>
   <body>
 """)
-        for package_name, package_filename, package_hash in package_data:
+        for package_name, package_filename, _ in package_data:
             package_path = repo_dir / package_filename
             pypi_index_file.write("""\
     <a href="{p}/">{p}</a>
@@ -709,14 +743,15 @@ def _extract(output, hashlist, output_dir):
                     status = 'package-hash'
                 elif status == 'package-hash':
                     package_hash = src
-                    if package_hash in hashlist:
+                    if package_hash in hashset:
                         if package_file:
                             package_file.close()
                         package_path = output_dir / package_filename
                         if not package_path.parent.is_dir():
                             package_path.parent.mkdir(parents=True)
                         package_data.append((package_name, package_filename, package_hash))
-                        output("extracting package {} [{}]...".format(package_filename, package_hash))
+                        output("extracting package {} [{}]...".format(
+                            package_filename, package_hash))
                         package_file = open(package_path, 'wb')
                         status = 'package-data'
                     else:
@@ -752,6 +787,7 @@ def check(install_dir=None):
         check_wrap_info(wrap_info)
 
 
+@locked
 def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=None):
     """Install the box, if needed"""
     if update_shebang is None:
@@ -945,7 +981,7 @@ Box: {box_name} [{box_type}]
             print("    + {}".format(package_name))
             for package_path, package_hash in package_data.items():
                 print("      + {}: {}".format(package_hash, package_path))
- 
+
 
 ################################################################################
 ### parser commands ############################################################
@@ -1244,7 +1280,8 @@ def add_extract_parser(subparsers):
         matching_entries = []
         for package_name, package_data in get_repo().items():
             for package_filename, package_hash in package_data.items():
-                if package_filename == value or package_name == value or package_hash.startswith(value):
+                if (package_filename == value or package_name == value or
+                        package_hash.startswith(value)):
                     matching_entries.append(package_hash)
         if len(matching_entries) == 1:
             return matching_entries[0]
