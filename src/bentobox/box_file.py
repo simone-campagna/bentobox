@@ -168,7 +168,7 @@ def configure_logging(verbose_level=None):
         'version': 1,
         'formatters': {
             'standard': {
-                'format': '# %(levelname)-10s %(message)s',
+                'format': '<BENTOBOX> %(levelname)-10s %(message)s',
                 'datefmt': '%Y%m%d %H:%M:%S',
             }
         },
@@ -256,6 +256,9 @@ UNINSTALL = get_env_var(
 FORCE_REINSTALL = get_env_var(
     "BBOX_FORCE_REINSTALL", var_type=boolean, default=False,
     description="force reinstall")
+
+
+configure_logging(VERBOSE_LEVEL)
 
 
 def default_install_dir():
@@ -513,19 +516,18 @@ def lockfile(filepath=None):
             pdir.mkdir(parents=True)
         filepath = pdir.joinpath("." + install_dir.name + ".bentobox.lock")
     pid = os.getpid()
-    with Output() as output:
-        with open(filepath, 'w+') as fhandle:
-            try:
-                output("[{}]: waiting for lock {}...".format(pid, filepath))
-                fcntl.lockf(fhandle.fileno(), fcntl.LOCK_EX)
-                output("[{}]: lock {} acquired".format(pid, filepath))
-                fhandle.write("{}\n".format(pid))
-                yield filepath
-            finally:
-                fcntl.lockf(fhandle.fileno(), fcntl.LOCK_UN)
-        if filepath.is_file():
-            output("[{}]: removing lock {}".format(pid, filepath))
-            filepath.unlink()
+    with open(filepath, 'w+') as fhandle:
+        try:
+            LOG.debug("waiting for lock %s...", filepath)
+            fcntl.lockf(fhandle.fileno(), fcntl.LOCK_EX)
+            LOG.debug("lock %s acquired", filepath)
+            fhandle.write("{}\n".format(pid))
+            yield filepath
+        finally:
+            fcntl.lockf(fhandle.fileno(), fcntl.LOCK_UN)
+    if filepath.is_file():
+        LOG.debug("removing lock %s", filepath)
+        filepath.unlink()
 
 
 def locked(function):
@@ -664,15 +666,7 @@ def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
 ### exported functions #########################################################
 ################################################################################
 
-def create_pypi_simple(repo_dir, package_data, pypi_dir=None):
-    repo_dir = Path(repo_dir).resolve()
-    if pypi_dir is None:
-        pypi_dir = repo_dir / 'simple'
-    shutil.rmtree(pypi_dir, ignore_errors=True)
-    pypi_dir.mkdir(parents=True)
-    pypi_index_path = pypi_dir / 'index.html'
-    with open(pypi_index_path, "w") as pypi_index_file:
-        pypi_index_file.write("""\
+MAIN_INDEX_SOURCE = """\
 <!DOCTYPE html>
 <html>
   <head>
@@ -682,28 +676,49 @@ def create_pypi_simple(repo_dir, package_data, pypi_dir=None):
     <meta name='api-version' value='2' />
   </head>
   <body>
-""")
-        for package_name, package_filename, _ in package_data:
-            package_path = repo_dir / package_filename
-            pypi_index_file.write("""\
-    <a href="{p}/">{p}</a>
-""".format(p=package_name))
-            package_dir = pypi_dir / package_name
-            if not package_dir.is_dir():
-                package_dir.mkdir(parents=True)
-            package_link_path = package_dir / package_path.name
-            # print("source:", package_path)
-            # print("target:", package_link_path)
-            package_link_path.symlink_to(Path("..") / ".." / package_path.name)
-            package_index_path = package_dir / 'index.html'
-            with open(package_index_path, "w") as package_index_file:
-                package_index_file.write(
-                    '<a href="{p}">{p}</a><br />\n'.format(p=package_filename)
-                )
-        pypi_index_file.write("""\
+{content}
   </body>
 </html>
-""")
+"""
+
+PACKAGE_REF_SOURCE = '''    <a href="{package_name}/">{package_name}</a>'''
+
+
+PACKAGE_INDEX_SOURCE = """\
+<!DOCTYPE html>
+<html>
+  <body>
+    <a href="{package_filename}">{package_filename}</a><br />
+  </body>
+</html>
+"""
+
+
+def build_pypi_simple(repo_dir, package_data, pypi_dir=None):
+    repo_dir = Path(repo_dir).resolve()
+    if pypi_dir is None:
+        pypi_dir = repo_dir / 'simple'
+    shutil.rmtree(pypi_dir, ignore_errors=True)
+    pypi_dir.mkdir(parents=True)
+    pypi_index_path = pypi_dir / 'index.html'
+    content = []
+    for package_name, package_filename, _ in package_data:
+        content.append(PACKAGE_REF_SOURCE.format(package_name=package_name))
+        package_path = repo_dir / package_filename
+        package_dir = pypi_dir / package_name
+        if not package_dir.is_dir():
+            package_dir.mkdir(parents=True)
+        package_link_path = package_dir / package_path.name
+        package_link_path.symlink_to(Path("..") / ".." / package_path.name)
+        package_index_path = package_dir / 'index.html'
+        with open(package_index_path, "w") as package_index_file:
+            package_index_file.write(
+                PACKAGE_INDEX_SOURCE.format(package_filename=package_filename)
+            )
+    with open(pypi_index_path, "w") as pypi_index_file:
+        pypi_index_file.write(MAIN_INDEX_SOURCE.format(
+            content='\n'.join(content)
+        ))
     return pypi_dir
 
 
@@ -764,7 +779,7 @@ def _extract(output, hashlist, output_dir):
     finally:
         if package_file:
             package_file.close()
-    return create_pypi_simple(output_dir, package_data)
+    return build_pypi_simple(output_dir, package_data)
 
 
 def extract(hashlist, output_dir=None, verbose_level=None):
@@ -805,7 +820,7 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=No
         env_file = env_file.resolve()
         source_file = env_file
 
-    venv_dir = install_dir / "virtualenv"
+    venv_dir = install_dir / "venv"
     venv_bin_dir = venv_dir / "bin"
     config = {
         'version': VERSION,
@@ -887,7 +902,7 @@ exec {python_exe} "$@"
 
                 pypi_dir = _extract(output, None, repo_dir)
 
-                output("creating virtualenv {}...".format(venv_dir))
+                output("creating venv {}...".format(venv_dir))
                 venv.create(venv_dir, with_pip=True)
                 if FREEZE:
                     for python_name in 'python3', 'python':
