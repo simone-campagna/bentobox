@@ -15,7 +15,12 @@ from base64 import b64encode
 from pathlib import Path
 
 from .util import load_box_module
-from .env import DEFAULT_PYTHON_INTERPRETER, INIT_VENV_PACKAGES
+from .env import (
+    DEFAULT_PYTHON_INTERPRETER,
+    INIT_VENV_PACKAGES,
+    BENTOBOX_VERSION,
+    BOX_FILE_VERSION,
+)
 from . import box_file
 
 
@@ -229,6 +234,8 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
             repo[package_name][package_path.name] = hash_placeholder
 
         state = {
+            "box_version": BENTOBOX_VERSION,
+            "box_file_version": BOX_FILE_VERSION,
             "box_name": box_name,
             "python_interpreter": python_interpreter,
             "python_interpreter_orig": None,

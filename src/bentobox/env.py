@@ -18,6 +18,7 @@ DEFAULT_PYTHON_INTERPRETER = '/usr/bin/env python3'
 INIT_VENV_PACKAGES = ('setuptools', 'pip')
 
 BENTOBOX_VERSION = '0.1.0'
+BOX_FILE_VERSION = 1
 
 def get_bentobox_version():
     return BENTOBOX_VERSION

@@ -85,6 +85,10 @@ class BoxInternalError(Exception):
     pass
 
 
+class BoxFileVersionMismatch(Exception):
+    pass
+
+
 class WrapMode(enum.Enum):
     NONE = 0
     SINGLE = 1
@@ -140,6 +144,7 @@ _LOG_STATE = None
 # initial values:
 VERBOSE_LEVEL = 0
 
+DEBUG_LEVEL = 3
 
 def get_verbose_level(verbose_level=None):
     """Return verbose level"""
@@ -155,7 +160,7 @@ def configure_logging(verbose_level=None):
     new_log_state = verbose_level
     if _LOG_STATE == new_log_state:
         return
-    if verbose_level >= 3:
+    if verbose_level >= DEBUG_LEVEL:
         log_level = 'DEBUG'
     elif verbose_level >= 2:
         log_level = 'INFO'
@@ -516,18 +521,22 @@ def lockfile(filepath=None):
             pdir.mkdir(parents=True)
         filepath = pdir.joinpath("." + install_dir.name + ".bentobox.lock")
     pid = os.getpid()
-    with open(filepath, 'w+') as fhandle:
-        try:
-            LOG.debug("waiting for lock %s...", filepath)
-            fcntl.lockf(fhandle.fileno(), fcntl.LOCK_EX)
-            LOG.debug("lock %s acquired", filepath)
-            fhandle.write("{}\n".format(pid))
-            yield filepath
-        finally:
-            fcntl.lockf(fhandle.fileno(), fcntl.LOCK_UN)
-    if filepath.is_file():
-        LOG.debug("removing lock %s", filepath)
-        filepath.unlink()
+    fhandle = open(filepath, 'w+')
+    try:
+        LOG.debug("waiting for lock %s...", filepath)
+        fcntl.lockf(fhandle.fileno(), fcntl.LOCK_EX)
+        LOG.debug("lock %s acquired", filepath)
+        fhandle.write("{}\n".format(pid))
+        yield filepath
+    finally:
+        fcntl.lockf(fhandle.fileno(), fcntl.LOCK_UN)
+        LOG.debug("lock %s released", filepath)
+        fhandle.close()
+        if filepath.exists():
+            LOG.debug("removing lock %s", filepath)
+            filepath.unlink()
+        else:
+            LOG.debug("lock %s has gone!", filepath)
 
 
 def locked(function):
@@ -823,7 +832,8 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=No
     venv_dir = install_dir / "venv"
     venv_bin_dir = venv_dir / "bin"
     config = {
-        'version': VERSION,
+        'box_version': VERSION,
+        'box_file_version': STATE['box_file_version'],
         'install_dir': install_dir,
         'env_file': env_file,
         'source_file': source_file,
@@ -834,13 +844,17 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=No
     }
 
     do_install = True
-    if bentobox_config_file.exists():
-        with open(bentobox_config_file, "r") as fconfig:
-            installed_config = json.load(fconfig)
+    installed_config = get_config()
+    if installed_config is not None:
         if reinstall:
             LOG.warning("reinstalling box %s...", STATE['box_name'])
             do_install = True
         else:
+            installed_box_file_version = installed_config.get('box_file_version', 0)
+            if installed_box_file_version != STATE['box_file_version']:
+                raise BoxFileVersionMismatch("installed version: {} current version: {}".format(
+                    installed_box_file_version,
+                    STATE['box_file_version']))
             installed_packages = installed_config['packages']
             configured_packages = STATE['packages']
             num_common_packages = 0
@@ -1428,38 +1442,44 @@ Box {box_name!r} - show box state
 ################################################################################
 
 def main(args=None):
-    if args is None:
-        args = sys.argv[1:]
+    try:
+        if args is None:
+            args = sys.argv[1:]
 
-    if FORCE_REINSTALL or UNINSTALL:
-        config = get_config()
-        if config is None:
-            LOG.warning("%r is not installed", STATE['box_name'])
-        else:
-            cmd_uninstall()
-            LOG.warning("%r has been successfully uninstalled", STATE['box_name'])
-        if FORCE_REINSTALL:
-            if config is not None:
-                executable = __file__
-                cmdline = [executable] + list(args)
-                environ = get_environ(config)
-                environ.pop('BBOX_FORCE_REINSTALL', None)
-                return os.execve(executable, cmdline, environ)
-        else:
-            if args:
-                LOG.warning("command line arguments ignored: %s",
-                            " ".join(shlex.quote(arg) for arg in args))
-            sys.exit(0)
+        if FORCE_REINSTALL or UNINSTALL:
+            config = get_config()
+            if config is None:
+                LOG.warning("%r is not installed", STATE['box_name'])
+            else:
+                cmd_uninstall()
+                LOG.warning("%r has been successfully uninstalled", STATE['box_name'])
+            if FORCE_REINSTALL:
+                if config is not None:
+                    executable = __file__
+                    cmdline = [executable] + list(args)
+                    environ = get_environ(config)
+                    environ.pop('BBOX_FORCE_REINSTALL', None)
+                    return os.execve(executable, cmdline, environ)
+            else:
+                if args:
+                    LOG.warning("command line arguments ignored: %s",
+                                " ".join(shlex.quote(arg) for arg in args))
+                sys.exit(0)
 
-    wrap_info = get_wrap_info()
-    if wrap_info.wrap_mode is WrapMode.SINGLE:
-        return main_wrap_single(wrap_info.wraps, args)
-    elif wrap_info.wrap_mode is WrapMode.MULTIPLE:
-        return main_wrap_multiple(wrap_info.wraps, args)
-    elif wrap_info.wrap_mode is WrapMode.ALL:
-        return main_wrap_multiple(None, args)
-    else:
-        return main_box(args)
+        wrap_info = get_wrap_info()
+        if wrap_info.wrap_mode is WrapMode.SINGLE:
+            return main_wrap_single(wrap_info.wraps, args)
+        elif wrap_info.wrap_mode is WrapMode.MULTIPLE:
+            return main_wrap_multiple(wrap_info.wraps, args)
+        elif wrap_info.wrap_mode is WrapMode.ALL:
+            return main_wrap_multiple(None, args)
+        else:
+            return main_box(args)
+    except Exception as err:  # pylint: disable=broad-except
+        if VERBOSE_LEVEL >= DEBUG_LEVEL:
+            LOG.exception("exception found:")
+        else:
+            LOG.error("%s: %s", type(err).__name__, err)
 
 
 def main_box(args=None):
