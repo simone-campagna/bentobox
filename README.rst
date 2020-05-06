@@ -33,6 +33,7 @@ installed (the default install dir is ``~/.bentobox/boxes/bumpversion``).
   usage: bumpversion [-h] [--config-file FILE] [--verbose] [--list]
   ...
 
+
 Bundled packages
 ----------------
 
@@ -66,6 +67,12 @@ command will automatically create the distribution file to be bundled:
 
 Notice that for local pakcages a ``/`` in the path is necessary: if a
 package name does not contain a ``/``, it is considered a pypi package.
+
+If the ``-d/--download`` option is added, all the necessary python packages are downloaded
+from PyPI and bundled into the generated box file. In this case, all the dependencies
+are completely fixed when the box file is created, so the execution does not depend on
+the current version of depended python packages. Moreover, there is no need to
+have a working network connection on the execution host.
 
 The installation phase
 ----------------------

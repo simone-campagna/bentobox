@@ -4,7 +4,7 @@
 
 """
 {
-    "box_version": "0.1.0",
+    "version": "0.1.0",
     "box_file_version": 1,
     "box_name": "box-name",
     "python_interpreter": "/usr/bin/env python3",
@@ -511,41 +511,38 @@ def set_write_mode(filename):
             filename.chmod(old_mode)
 
 
+Lock = collections.namedtuple(  # pylint: disable=invalid-name
+    "Lock", "path")
+
+
 @contextlib.contextmanager
-def lockfile(filepath=None):
+def lockfile(lock=None):
     """Lock file contex tmanager"""
-    if filepath is None:
-        install_dir = get_install_dir()
-        pdir = install_dir.parent
-        if not pdir.is_dir():
-            pdir.mkdir(parents=True)
-        filepath = pdir.joinpath("." + install_dir.name + ".bentobox.lock")
+    logfn = LOG.debug
+    if lock is not None:
+        yield lock
+        return
+    install_dir = get_install_dir()
+    if not install_dir.exists():
+        install_dir.mkdir(parents=True)
+    lockpath = install_dir.joinpath("." + install_dir.name + ".bentobox.lock")
     pid = os.getpid()
-    fhandle = open(filepath, 'w+')
+    fhandle = open(lockpath, 'w+')
     try:
-        LOG.debug("waiting for lock %s...", filepath)
+        logfn("waiting for lock %s...", lockpath)
         fcntl.lockf(fhandle.fileno(), fcntl.LOCK_EX)
-        LOG.debug("lock %s acquired", filepath)
+        logfn("lock %s acquired", lockpath)
         fhandle.write("{}\n".format(pid))
-        yield filepath
+        yield Lock(path=lockpath)
     finally:
         fcntl.lockf(fhandle.fileno(), fcntl.LOCK_UN)
-        LOG.debug("lock %s released", filepath)
+        logfn("lock %s released", lockpath)
         fhandle.close()
-        if filepath.exists():
-            LOG.debug("removing lock %s", filepath)
-            filepath.unlink()
+        if lockpath.exists():
+            logfn("removing lock %s", lockpath)
+            lockpath.unlink()
         else:
-            LOG.debug("lock %s has gone!", filepath)
-
-
-def locked(function):
-    """Locked decorator"""
-    @functools.wraps(function)
-    def wrapped(*args, **kwargs):
-        with lockfile():
-            return function(*args, **kwargs)
-    return wrapped
+            logfn("lock %s has gone!", lockpath)
 
 
 def get_header_len(output_path):
@@ -574,7 +571,6 @@ def filler(fill_len, line_len=80):
         return ''
 
 
-@locked
 def replace_state(output_path, state):
     """Replace the box state"""
     output_path = Path(output_path)
@@ -669,6 +665,188 @@ def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
     if update_shebang is not UNDEFINED:
         state['update_shebang'] = update_shebang
     replace_state(output_path, state)
+
+
+def uninstall(verbose_level=None):
+    verbose_level = get_verbose_level(verbose_level)
+    install_dir = get_install_dir()
+    with Output(verbose_level=verbose_level) as output:
+        with lockfile():
+            shutil.rmtree(install_dir, ignore_errors=True)
+        _reset_box_header(output)
+
+
+def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=None):
+    """Install the box, if needed"""
+    if update_shebang is None:
+        update_shebang = UPDATE_SHEBANG
+
+    install_dir = get_install_dir()
+
+    repo_dir = install_dir / "repo"
+    bentobox_config_file = install_dir / "bentobox-config.json"
+    bentobox_env_file = install_dir / "bentobox-env.sh"
+
+    with Output(verbose_level=verbose_level) as output:
+        with lockfile():
+
+            if env_file is None:
+                source_file = bentobox_env_file.resolve()
+            else:
+                env_file = env_file.resolve()
+                source_file = env_file
+
+            venv_dir = install_dir / "venv"
+            venv_bin_dir = venv_dir / "bin"
+            config = {
+                'version': VERSION,
+                'box_file_version': STATE['box_file_version'],
+                'install_dir': install_dir,
+                'env_file': env_file,
+                'source_file': source_file,
+                'venv_dir': venv_dir,
+                'venv_bin_dir': venv_bin_dir,
+                'pip_install_args': STATE['pip_install_args'],
+                'packages': STATE['packages'],
+            }
+
+            do_install = True
+            installed_config = get_config()
+            if installed_config is not None:
+                if reinstall:
+                    LOG.warning("reinstalling box %s...", STATE['box_name'])
+                    do_install = True
+                else:
+                    installed_box_file_version = installed_config.get('box_file_version', 0)
+                    if installed_box_file_version != STATE['box_file_version']:
+                        raise BoxFileVersionMismatch(
+                            "installed version: {} current version: {}".format(
+                                installed_box_file_version,
+                                STATE['box_file_version']))
+                    installed_packages = installed_config['packages']
+                    configured_packages = STATE['packages']
+                    num_common_packages = 0
+                    for pkg1, pkg2 in zip(installed_packages, configured_packages):
+                        if pkg1 != pkg2:
+                            break
+                        num_common_packages += 1
+                    if STATE['packages'] != installed_config['packages']:
+                        for ptype, packages in [('installed', installed_config['packages']),
+                                                ('configured', STATE['packages'])]:
+                            LOG.debug("%s packages:", ptype)
+                            for idx, pkg in enumerate(packages):
+                                if idx < num_common_packages:
+                                    pre = '='
+                                else:
+                                    pre = '!'
+                                LOG.debug("  %s %s", pre, pkg)
+                        if reinstall is None:
+                            LOG.warning("already installed, but reinstall is needed")
+                            do_install = True
+                        else:
+                            LOG.error("already installed, but reinstall is needed")
+                            return None
+                    else:
+                        do_install = False
+
+            if do_install:
+                def freeze_python(output, venv_bin_dir, python_name):
+                    python_exe = venv_bin_dir / python_name
+                    if python_exe.exists():
+                        output("freezing python {}...".format(python_name))
+                        if python_exe.is_symlink():
+                            python_actual_exe = python_exe.resolve()
+                            python_exe.unlink()
+                        else:
+                            python_actual_exe = venv_bin_dir / ("bentobox-" + python_name)
+                            python_exe.rename(python_actual_exe)
+                        python_wrapper_source = """\
+#!/bin/bash
+
+export LD_LIBRARY_PATH="${{LD_LIBRARY_PATH}}:{python_libs}"
+exec {python_exe} "$@"
+""".format(python_exe=python_actual_exe, python_libs=os.environ.get('LD_LIBRARY_PATH', ''))
+                        with open(python_exe, "w") as fhandle:
+                            fhandle.write(python_wrapper_source)
+                        python_exe.chmod(python_actual_exe.stat().st_mode)
+                        return python_exe
+                    return None
+
+                try:
+                    if bentobox_config_file.exists():
+                        output("removing install dir {}...".format(install_dir))
+                        shutil.rmtree(install_dir, ignore_errors=True)
+
+                    if not repo_dir.is_dir():
+                        repo_dir.mkdir(parents=True)
+
+                    pypi_dir = _extract(output, None, repo_dir)
+
+                    output("creating venv {}...".format(venv_dir))
+                    venv.create(venv_dir, with_pip=True)
+                    if FREEZE:
+                        for python_name in 'python3', 'python':
+                            freeze_python(output, venv_bin_dir, python_name)
+
+                    pip_path = venv_bin_dir / "pip"
+
+                    environ = get_environ(config)
+
+                    if STATE['use_pypi']:
+                        pip_index_options = ["--extra-index-url", "file://" + str(pypi_dir)]
+                    else:
+                        pip_index_options = ["--index-url", "file://" + str(pypi_dir)]
+
+                    output("initializing venv...")
+                    pip_cmdline = [str(pip_path), "install", "--upgrade"]
+                    pip_cmdline += pip_index_options
+                    pip_cmdline += STATE['init_venv_packages']
+                    output.run_command(pip_cmdline, env=environ)
+
+                    output("installing packages...")
+                    pip_cmdline = [str(pip_path), "install"]
+                    pip_cmdline.extend(str(arg) for arg in STATE['pip_install_args'])
+                    pip_cmdline += pip_index_options
+                    pip_cmdline += STATE['packages']
+                    output.run_command(pip_cmdline, env=environ)
+
+                    base_commands = set(find_executables(venv_bin_dir))
+                    installed_commands = set(find_executables(venv_bin_dir)) - base_commands
+                    config["installed_commands"] = sorted(installed_commands)
+
+                    output("creating activate file {}...".format(bentobox_env_file))
+                    with open(bentobox_env_file, "w") as fhandle:
+                        fhandle.write("""\
+# environmen    t for box {box_name}
+# automatically created by bentobox
+
+export PATH="${{PATH}}:{venv_bin_dir}"
+""".format(venv_bin_dir=venv_bin_dir, **STATE))
+                    output("creating config file {}...".format(bentobox_config_file))
+                    with open(bentobox_config_file, "w") as fhandle:
+                        print(json.dumps(tojson(config), indent=4, sort_keys=True), file=fhandle)
+                except:  # pylint: disable=bare-except
+                    shutil.rmtree(install_dir, ignore_errors=True)
+                    raise
+
+        if env_file:
+            output("copying env file to {}...".format(env_file))
+            if not env_file.parent.is_dir():
+                env_file.parent.mkdir(parents=True)
+            shutil.copyfile(bentobox_env_file, env_file)
+
+        if update_shebang:
+            python_interpreter = sys.executable
+            for python_name in 'python3', 'python':
+                python_exe = venv_bin_dir / python_name
+                if python_exe.is_file():
+                    python_interpreter = python_exe
+                    break
+            _update_box_header(output, str(python_interpreter))
+
+    if not do_install:
+        config = get_config()
+    return do_install, config
 
 
 ################################################################################
@@ -811,179 +989,6 @@ def check(install_dir=None):
         check_wrap_info(wrap_info)
 
 
-@locked
-def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=None):
-    """Install the box, if needed"""
-    if update_shebang is None:
-        update_shebang = UPDATE_SHEBANG
-
-    install_dir = get_install_dir()
-
-    repo_dir = install_dir / "repo"
-    bentobox_config_file = install_dir / "bentobox-config.json"
-    bentobox_env_file = install_dir / "bentobox-env.sh"
-
-    if env_file is None:
-        source_file = bentobox_env_file.resolve()
-    else:
-        env_file = env_file.resolve()
-        source_file = env_file
-
-    venv_dir = install_dir / "venv"
-    venv_bin_dir = venv_dir / "bin"
-    config = {
-        'box_version': VERSION,
-        'box_file_version': STATE['box_file_version'],
-        'install_dir': install_dir,
-        'env_file': env_file,
-        'source_file': source_file,
-        'venv_dir': venv_dir,
-        'venv_bin_dir': venv_bin_dir,
-        'pip_install_args': STATE['pip_install_args'],
-        'packages': STATE['packages'],
-    }
-
-    do_install = True
-    installed_config = get_config()
-    if installed_config is not None:
-        if reinstall:
-            LOG.warning("reinstalling box %s...", STATE['box_name'])
-            do_install = True
-        else:
-            installed_box_file_version = installed_config.get('box_file_version', 0)
-            if installed_box_file_version != STATE['box_file_version']:
-                raise BoxFileVersionMismatch("installed version: {} current version: {}".format(
-                    installed_box_file_version,
-                    STATE['box_file_version']))
-            installed_packages = installed_config['packages']
-            configured_packages = STATE['packages']
-            num_common_packages = 0
-            for pkg1, pkg2 in zip(installed_packages, configured_packages):
-                if pkg1 != pkg2:
-                    break
-                num_common_packages += 1
-            if STATE['packages'] != installed_config['packages']:
-                for ptype, packages in [('installed', installed_config['packages']),
-                                        ('configured', STATE['packages'])]:
-                    LOG.debug("%s packages:", ptype)
-                    for idx, pkg in enumerate(packages):
-                        if idx < num_common_packages:
-                            pre = '='
-                        else:
-                            pre = '!'
-                        LOG.debug("  %s %s", pre, pkg)
-                if reinstall is None:
-                    LOG.warning("already installed, but reinstall is needed")
-                    do_install = True
-                else:
-                    LOG.error("already installed, but reinstall is needed")
-                    return None
-            else:
-                do_install = False
-
-    with Output(verbose_level=verbose_level) as output:
-
-        if do_install:
-            def freeze_python(output, venv_bin_dir, python_name):
-                python_exe = venv_bin_dir / python_name
-                if python_exe.exists():
-                    output("freezing python {}...".format(python_name))
-                    if python_exe.is_symlink():
-                        python_actual_exe = python_exe.resolve()
-                        python_exe.unlink()
-                    else:
-                        python_actual_exe = venv_bin_dir / ("bentobox-" + python_name)
-                        python_exe.rename(python_actual_exe)
-                    python_wrapper_source = """\
-#!/bin/bash
-
-export LD_LIBRARY_PATH="${{LD_LIBRARY_PATH}}:{python_libs}"
-exec {python_exe} "$@"
-""".format(python_exe=python_actual_exe, python_libs=os.environ.get('LD_LIBRARY_PATH', ''))
-                    with open(python_exe, "w") as fhandle:
-                        fhandle.write(python_wrapper_source)
-                    python_exe.chmod(python_actual_exe.stat().st_mode)
-                    return python_exe
-                return None
-
-            try:
-                if bentobox_config_file.exists():
-                    output("removing install dir {}...".format(install_dir))
-                    shutil.rmtree(install_dir, ignore_errors=True)
-
-                if not repo_dir.is_dir():
-                    repo_dir.mkdir(parents=True)
-
-                pypi_dir = _extract(output, None, repo_dir)
-
-                output("creating venv {}...".format(venv_dir))
-                venv.create(venv_dir, with_pip=True)
-                if FREEZE:
-                    for python_name in 'python3', 'python':
-                        freeze_python(output, venv_bin_dir, python_name)
-                base_commands = set(find_executables(venv_bin_dir))
-
-                pip_path = venv_bin_dir / "pip"
-
-                environ = get_environ(config)
-
-                if STATE['use_pypi']:
-                    pip_index_options = ["--extra-index-url", "file://" + str(pypi_dir)]
-                else:
-                    pip_index_options = ["--index-url", "file://" + str(pypi_dir)]
-
-                output("initializing venv...")
-                pip_cmdline = [str(pip_path), "install", "--upgrade"]
-                pip_cmdline += pip_index_options
-                pip_cmdline += STATE['init_venv_packages']
-                output.run_command(pip_cmdline, env=environ)
-
-                installed_commands = set(find_executables(venv_bin_dir)).difference(base_commands)
-                output("installing packages...")
-                pip_cmdline = [str(pip_path), "install"]
-                pip_cmdline.extend(str(arg) for arg in STATE['pip_install_args'])
-                pip_cmdline += pip_index_options
-                pip_cmdline += STATE['packages']
-                output.run_command(pip_cmdline, env=environ)
-
-                installed_commands = set(find_executables(venv_bin_dir)).difference(base_commands)
-                config["installed_commands"] = sorted(installed_commands)
-
-                output("creating activate file {}...".format(bentobox_env_file))
-                with open(bentobox_env_file, "w") as fhandle:
-                    fhandle.write("""\
-# environment for box {box_name}
-# automatically created by bentobox
-
-export PATH="${{PATH}}:{venv_bin_dir}"
-""".format(venv_bin_dir=venv_bin_dir, **STATE))
-                output("creating config file {}...".format(bentobox_config_file))
-                with open(bentobox_config_file, "w") as fhandle:
-                    print(json.dumps(tojson(config), indent=4, sort_keys=True), file=fhandle)
-            except:  # pylint: disable=bare-except
-                shutil.rmtree(install_dir, ignore_errors=True)
-                raise
-
-        if env_file:
-            output("copying env file to {}...".format(env_file))
-            if not env_file.parent.is_dir():
-                env_file.parent.mkdir(parents=True)
-            shutil.copyfile(bentobox_env_file, env_file)
-
-        if update_shebang:
-            python_interpreter = sys.executable
-            for python_name in 'python3', 'python':
-                python_exe = venv_bin_dir / python_name
-                if python_exe.is_file():
-                    python_interpreter = python_exe
-                    break
-            _update_box_header(output, str(python_interpreter))
-
-    if not do_install:
-        config = get_config()
-    return do_install, config
-
-
 def show(mode='text'):
     """Show command"""
     if mode == 'json':
@@ -1072,11 +1077,7 @@ To activate the installation run:
 
 def cmd_uninstall(verbose_level=None):
     """Uninstall command"""
-    verbose_level = get_verbose_level(verbose_level)
-    install_dir = get_install_dir()
-    shutil.rmtree(install_dir, ignore_errors=True)
-    with Output(verbose_level=verbose_level) as output:
-        _reset_box_header(output)
+    uninstall(verbose_level=verbose_level)
 
 
 def cmd_show(mode='text'):
@@ -1449,10 +1450,10 @@ def main(args=None):
         if FORCE_REINSTALL or UNINSTALL:
             config = get_config()
             if config is None:
-                LOG.warning("%r is not installed", STATE['box_name'])
+                LOG.debug("%r is not installed", STATE['box_name'])
             else:
-                cmd_uninstall()
-                LOG.warning("%r has been successfully uninstalled", STATE['box_name'])
+                uninstall()
+                LOG.debug("%r has been successfully uninstalled", STATE['box_name'])
             if FORCE_REINSTALL:
                 if config is not None:
                     executable = __file__

@@ -234,7 +234,7 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
             repo[package_name][package_path.name] = hash_placeholder
 
         state = {
-            "box_version": BENTOBOX_VERSION,
+            "version": BENTOBOX_VERSION,
             "box_file_version": BOX_FILE_VERSION,
             "box_name": box_name,
             "python_interpreter": python_interpreter,
