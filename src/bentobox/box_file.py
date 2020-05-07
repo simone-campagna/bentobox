@@ -95,6 +95,17 @@ class WrapMode(enum.Enum):
     MULTIPLE = 2
     ALL = 3
 
+
+def make_parent_dir(pth):
+    pth = Path(pth)
+    if not pth.parent.exists():
+        pth.parent.mkdir(parents=True)
+
+
+Lock = collections.namedtuple(  # pylint: disable=invalid-name
+    "Lock", "path")
+
+
 WrapInfo = collections.namedtuple(  # pylint: disable=invalid-name
     "WrapInfo",
     ["wrap_mode", "wraps"]
@@ -173,7 +184,7 @@ def configure_logging(verbose_level=None):
         'version': 1,
         'formatters': {
             'standard': {
-                'format': '<BENTOBOX> %(levelname)-10s %(message)s',
+                'format': '<BENTOBOX> %(levelname)-10s %(asctime)s %(message)s',
                 'datefmt': '%Y%m%d %H:%M:%S',
             }
         },
@@ -283,13 +294,66 @@ def get_install_dir():
 
 def get_config():
     """Get the installed config file, if it exists"""
-    config_path = get_install_dir() / 'bentobox-config.json'
-    if config_path.is_file():
-        with open(config_path, 'r') as config_file:
-            config = json.load(config_file)
-    else:
-        config = None
-    return config
+    config_file = ConfigFile()
+    if config_file.path.is_file():
+        with config_file:
+            return config_file.config
+    return None
+
+
+class ConfigFile:
+    def __init__(self, mode="a+", lock=False):
+        self.__path = get_install_dir() / 'bentobox-config.json'
+        self.__mode = mode
+        self.__lock = lock
+        self.__file = None
+        self.__config = None
+
+    @property
+    def path(self):
+        return self.__path
+
+    def __enter__(self):
+        path = self.__path
+        make_parent_dir(path)
+        self.__file = open(path, self.__mode)
+        if self.__lock:
+            LOG.debug("acquiring lock %s...", path)
+            fcntl.lockf(self.__file.fileno(), fcntl.LOCK_EX)
+            LOG.debug("lock %s acquired", path)
+        return self
+
+    def __exit__(self, exc_type, exc_value, tback):
+        if self.__lock:
+            path = self.__path
+            LOG.debug("releasing lock %s...", path)
+            fcntl.lockf(self.__file.fileno(), fcntl.LOCK_EX)
+            LOG.debug("lock %s released", path)
+        self.__file.close()
+
+    def load(self):
+        self.__file.seek(0)
+        data = self.__file.read().strip()
+        if data:
+            return json.loads(data)
+        return None
+
+    def store(self, config):
+        self.__file.seek(0)
+        self.__file.truncate()
+        self.__file.write(json.dumps(tojson(config), indent=4))
+        self.__file.flush()
+
+    @property
+    def config(self):
+        if self.__config is None:
+            self.__config = self.load()
+        return self.__config
+
+    @config.setter
+    def config(self, value):
+        self.store(value)
+        self.__config = value
 
 
 def get_wrap_info(state=STATE):
@@ -511,40 +575,6 @@ def set_write_mode(filename):
             filename.chmod(old_mode)
 
 
-Lock = collections.namedtuple(  # pylint: disable=invalid-name
-    "Lock", "path")
-
-
-@contextlib.contextmanager
-def lockfile(lock=None):
-    """Lock file contex tmanager"""
-    logfn = LOG.debug
-    if lock is not None:
-        yield lock
-        return
-    install_dir = get_install_dir()
-    if not install_dir.exists():
-        install_dir.mkdir(parents=True)
-    lockpath = install_dir.joinpath("." + install_dir.name + ".bentobox.lock")
-    pid = os.getpid()
-    fhandle = open(lockpath, 'w+')
-    try:
-        logfn("waiting for lock %s...", lockpath)
-        fcntl.lockf(fhandle.fileno(), fcntl.LOCK_EX)
-        logfn("lock %s acquired", lockpath)
-        fhandle.write("{}\n".format(pid))
-        yield Lock(path=lockpath)
-    finally:
-        fcntl.lockf(fhandle.fileno(), fcntl.LOCK_UN)
-        logfn("lock %s released", lockpath)
-        fhandle.close()
-        if lockpath.exists():
-            logfn("removing lock %s", lockpath)
-            lockpath.unlink()
-        else:
-            logfn("lock %s has gone!", lockpath)
-
-
 def get_header_len(output_path):
     """Get the header length"""
     header_len = 0
@@ -591,13 +621,11 @@ def replace_state(output_path, state):
     else:
         header += filler(fill_len=HEADER_FILL_LEN)
         if not output_path.exists():
-            if not output_path.parent.is_dir():
-                output_path.parents.mkdir(parents=True)
+            make_parent_dir(output_path)
             shutil.copy(__file__, output_path)
         with set_write_mode(output_path):
             output_path_swp = output_path.with_name(output_path.name + ".swp")
-            if not output_path_swp.parent.is_dir():
-                output_path_swp.mkdir(parents=True)
+            make_parent_dir(output_path_swp)
             try:
                 with open(output_path_swp, "w") as target_file, \
                      open(output_path, "r") as source_file:
@@ -668,10 +696,10 @@ def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
 
 
 def uninstall(verbose_level=None):
-    verbose_level = get_verbose_level(verbose_level)
     install_dir = get_install_dir()
     with Output(verbose_level=verbose_level) as output:
-        with lockfile():
+        with ConfigFile(lock=True):
+            output("removing install dir {}...".format(install_dir))
             shutil.rmtree(install_dir, ignore_errors=True)
         _reset_box_header(output)
 
@@ -684,12 +712,11 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=No
     install_dir = get_install_dir()
 
     repo_dir = install_dir / "repo"
-    bentobox_config_file = install_dir / "bentobox-config.json"
     bentobox_env_file = install_dir / "bentobox-env.sh"
 
     with Output(verbose_level=verbose_level) as output:
-        with lockfile():
-
+        with ConfigFile(lock=True) as config_file:
+            installed_config = config_file.config
             if env_file is None:
                 source_file = bentobox_env_file.resolve()
             else:
@@ -711,7 +738,7 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=No
             }
 
             do_install = True
-            installed_config = get_config()
+            # installed_config = get_config()
             if installed_config is not None:
                 if reinstall:
                     LOG.warning("reinstalling box %s...", STATE['box_name'])
@@ -773,9 +800,14 @@ exec {python_exe} "$@"
                     return None
 
                 try:
-                    if bentobox_config_file.exists():
-                        output("removing install dir {}...".format(install_dir))
-                        shutil.rmtree(install_dir, ignore_errors=True)
+                    output("purge install dir...")
+                    for direntry in install_dir.glob("*"):
+                        if direntry.is_dir():
+                            shutil.rmtree(direntry, ignore_errors=True)
+                        else:
+                            if direntry.samefile(config_file.path):
+                                continue
+                            direntry.unlink()
 
                     if not repo_dir.is_dir():
                         repo_dir.mkdir(parents=True)
@@ -822,17 +854,17 @@ exec {python_exe} "$@"
 
 export PATH="${{PATH}}:{venv_bin_dir}"
 """.format(venv_bin_dir=venv_bin_dir, **STATE))
-                    output("creating config file {}...".format(bentobox_config_file))
-                    with open(bentobox_config_file, "w") as fhandle:
-                        print(json.dumps(tojson(config), indent=4, sort_keys=True), file=fhandle)
+                    output("saving config file {}...".format(config_file.path))
+                    config_file.config = config
+                    # with open(bentobox_config_file, "w") as fhandle:
+                    #     print(json.dumps(tojson(config), indent=4, sort_keys=True), file=fhandle)
                 except:  # pylint: disable=bare-except
                     shutil.rmtree(install_dir, ignore_errors=True)
                     raise
 
         if env_file:
             output("copying env file to {}...".format(env_file))
-            if not env_file.parent.is_dir():
-                env_file.parent.mkdir(parents=True)
+            make_parent_dir(env_file)
             shutil.copyfile(bentobox_env_file, env_file)
 
         if update_shebang:
@@ -949,8 +981,7 @@ def _extract(output, hashlist, output_dir):
                         if package_file:
                             package_file.close()
                         package_path = output_dir / package_filename
-                        if not package_path.parent.is_dir():
-                            package_path.parent.mkdir(parents=True)
+                        make_parent_dir(package_path)
                         package_data.append((package_name, package_filename, package_hash))
                         output("extracting package {} [{}]...".format(
                             package_filename, package_hash))
