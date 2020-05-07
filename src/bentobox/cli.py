@@ -149,7 +149,7 @@ Create a box file
     check_kwargs = {'dest': 'check', 'default': True}
     check_mgrp.add_argument(
         "-c", "--check",
-        action="store_false",
+        action="store_true",
         help="check box setup and configuration (default)",
         **check_kwargs)
     check_mgrp.add_argument(
