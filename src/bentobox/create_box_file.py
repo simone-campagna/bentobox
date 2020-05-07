@@ -14,6 +14,8 @@ import uuid
 from base64 import b64encode
 from pathlib import Path
 
+import pkg_resources
+
 from .util import load_box_module
 from .env import (
     DEFAULT_PYTHON_INTERPRETER,
@@ -65,15 +67,58 @@ class BoxInvalidPackageName(BoxCreateError):
 RE_BOX_NAME = re.compile(r"^\w+(?:\-\w+)*$")
 
 
-def get_package_name(archive_path):
+PackageInfo = collections.namedtuple(  # pylint: disable=invalid-name
+    "PackageInfo", "name version")
+
+
+PackageRequest = collections.namedtuple(  # pylint: disable=invalid-name
+    "PackageRequest", "info request path")
+
+
+def make_package_request(package_info, package_path):
+    if package_info.version:
+        request_fmt = "{p.name}=={p.version}"
+    else:
+        request_fmt = "{p.name}"
+    return PackageRequest(
+        info=package_info,
+        path=package_path,
+        request=request_fmt.format(p=package_info))
+
+
+def get_package_info_from_path(archive_path):
     """Get package name from archive path"""
     archive_path = Path(archive_path)
     archive_filename = archive_path.name
-    match = re.search(r"(?P<name>.*?)-(?:\d+.*)", archive_filename)
-    if not match:
-        raise BoxInvalidPackageName(archive_path)
-    dct = match.groupdict()
-    return dct['name']
+    if archive_path.suffix == ".egg":
+        dist = pkg_resources.Distribution.from_location(None, archive_filename)
+        name = dist.project_name
+        version = dist.version
+    else:
+        regex = r"(?P<name>.*?)-(?P<version>\d+(?:\.\d+)+)(?:.*)"
+        match = re.search(regex, archive_filename)
+        if not match:
+            raise BoxInvalidPackageName(archive_path)
+        dct = match.groupdict()
+        name = dct['name']
+        version = dct['version']
+    print(archive_path, "->", PackageInfo(name=name, version=version))
+    return PackageInfo(name=name, version=version)
+
+
+def get_package_info_from_requirement(requirement):
+    r_version_spec = re.compile(r"(?:==|~=|!=|<=|>=|<|>|===)")
+    lst = r_version_spec.split(requirement, maxsplit=1)
+    name, version = lst[0], None
+    if len(lst) > 1:
+        version = lst[1]
+    return PackageInfo(name=name, version=version)
+
+
+def get_package_info(package):
+    if isinstance(package, Path) or '/' in package:
+        return get_package_info_from_path(package)
+    return get_package_info_from_requirement(package)
 
 
 def check_box_name(value):
@@ -94,27 +139,25 @@ def run_command(cmdline, raising=True):
         cmd = " ".join(clist)
         if raising:
             print("$ {}".format(cmd), file=sys.stderr)
-            print(result.stdout, file=sys.stderr)
+            print(str(result.stdout, 'utf-8'), file=sys.stderr)
             raise BoxCommandError("command {} failed".format(cmd))
         print("ERR: command {} failed:".format(cmd), file=sys.stderr)
-        print(result.stdout, file=sys.stderr)
+        print(str(result.stdout, 'utf-8'), file=sys.stderr)
     return result.returncode
 
 
 class PackageRepo:
     def __init__(self, tmpdir):
         self.tmpdir = tmpdir
-        self.package_names = []
-        self._seen_packages = set()
-        self._pkg_data = []
+        self._pkgrequests = {}
 
     def create_package(self, package_path):
         if not package_path.exists():
             raise BoxPathError("path {} does not exist".format(package_path))
         tmpdir = self.tmpdir
         if package_path.is_file():
-            yield package_path
-        elif package_path.is_dir():
+            return package_path
+        else:
             setup_py_path = (package_path / "setup.py").resolve()
             if not setup_py_path.is_file():
                 raise BoxPathError("path {} does not exist".format(package_path))
@@ -128,27 +171,35 @@ class PackageRepo:
                 run_command(cmdline)
             finally:
                 os.chdir(old_cwd)
-            for pkg_path in pkg_tmpdir.glob("*"):
-                yield pkg_path
+            dists = list(pkg_tmpdir.glob("*"))
+            if not dists:
+                raise BoxPathError("path {}: dist file not found".format(package_path))
+            if len(dists) != 1:
+                raise BoxPathError("path {}: too many dist files found".format(package_path))
+            return dists[0]
 
-    def add_packages(self, packages):
+    def add_requirements(self, requirements):
+        pkgrequest = self._pkgrequests
         package_names = []
-        seen_packages = self._seen_packages
-        pkg_data = self._pkg_data
-        for package in packages:
-            if package in seen_packages:
-                continue
-            seen_packages.add(package)
-            if {'/', '.'}.intersection(str(package)):
-                for package_path in self.create_package(Path(package)):
-                    package_name = get_package_name(package_path)
-                    package_names.append(package_name)
-                    pkg_data.append((package, package_name, package_path))
+        for requirement in requirements:
+            if '/' in str(requirement):
+                package_path = self.create_package(Path(requirement))
+                package_info = get_package_info_from_path(package_path)
             else:
-                package_names.append(package)
-                pkg_data.append((package, package, None))
-        self.package_names.extend(packages)
+                package_path = None
+                package_info = get_package_info_from_requirement(requirement)
+            package_names.append(package_info.name)
+            pkgrequest[package_info.name] = make_package_request(
+                package_info=package_info,
+                package_path=package_path)
         return package_names
+
+    def get_requirements(self, package_names):
+        pkgrequest = self._pkgrequests
+        requirements = []
+        for package_name in package_names:
+            requirements.append(pkgrequest[package_name].request)
+        return requirements
 
     def get_package_paths(self, download=True):
         package_paths = []
@@ -171,17 +222,20 @@ class PackageRepo:
                 '--implementation', 'py',
                 '--abi', 'none',
             ]
-            for package in self.package_names:
-                cmdline.append(str(package))
+            for package_request in self._pkgrequests.values():
+                if package_request.path:
+                    cmdline.append(str(package_request.path))
+                else:
+                    cmdline.append(package_request.request)
             run_command(cmdline)
             for package_path in download_dir.glob("*"):
                 if package_path.is_file():
-                    package_name = get_package_name(package_path)
-                    package_paths.append((package_name, package_path))
+                    package_info = get_package_info_from_path(package_path)
+                    package_paths.append((package_info.name, package_path))
         else:
-            for package, package_name, package_path in self._pkg_data:
-                if package_path is not None:
-                    package_paths.append((package_name, package_path))
+            for package_name, package_request in self._pkgrequests.items():
+                if package_request.path is not None:
+                    package_paths.append((package_name, package_request.path))
         return package_paths
 
 
@@ -220,13 +274,16 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
 
 
         pkg_repo = PackageRepo(tmpdir=tmpdir)
-        iv_package_names = pkg_repo.add_packages(init_venv_packages)
-        package_names = pkg_repo.add_packages(packages)
+        init_package_names = pkg_repo.add_requirements(init_venv_packages)
+        user_package_names = pkg_repo.add_requirements(packages)
 
         package_paths = pkg_repo.get_package_paths(download=download)
 
         package_paths.sort(key=lambda x: x[1])
         package_paths.sort(key=lambda x: x[0])
+
+        init_packages = pkg_repo.get_requirements(init_package_names)
+        user_packages = pkg_repo.get_requirements(user_package_names)
 
         hash_placeholder = Hash().hexdigest()
         repo = collections.defaultdict(dict)
@@ -247,8 +304,8 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
             "verbose_level": int(verbose_level),
             "use_pypi": not download,
             "pip_install_args": pip_install_args,
-            "init_venv_packages": iv_package_names,
-            "packages": package_names,
+            "init_venv_packages": init_packages,
+            "packages": user_packages,
             "repo": repo,
         }
 
