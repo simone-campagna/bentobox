@@ -676,8 +676,8 @@ def _update_box_header(output, install_dir=None, python_interpreter=None):
         if not state['orig']['python_interpreter']:
             state['orig']['python_interpreter'] = state['python_interpreter']
         state['python_interpreter'] = python_interpreter
-    if install_dir is not None and (state['install_dir'] is None or
-            not same_path(state['install_dir'], install_dir)):
+    if (install_dir is not None and
+            (state['install_dir'] is None or not same_path(state['install_dir'], install_dir))):
         output("replacing install_dir...")
         if not state['orig']['install_dir']:
             state['orig']['install_dir'] = state['install_dir']

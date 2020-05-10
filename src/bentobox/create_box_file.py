@@ -14,8 +14,6 @@ import uuid
 from base64 import b64encode
 from pathlib import Path
 
-import pkg_resources
-
 from .util import load_box_module
 from .env import (
     DEFAULT_PYTHON_INTERPRETER,
@@ -23,15 +21,20 @@ from .env import (
     BENTOBOX_VERSION,
     BOX_FILE_VERSION,
 )
+from .errors import (
+    BoxNameError,
+    BoxPathError,
+    BoxFileError,
+    BoxCommandError,
+)
+from .package_info import (
+    make_package_info_from_path,
+    make_package_info_from_requirement,
+)
 from . import box_file
 
 
 __all__ = [
-    'BoxCreateError',
-    'BoxNameError',
-    'BoxPathError',
-    'BoxCommandError',
-    'BoxFileError',
     'check_box_name',
     'create_box_file',
 ]
@@ -40,35 +43,7 @@ __all__ = [
 Hash = hashlib.sha1
 
 
-class BoxCreateError(ValueError):
-    pass
-
-
-class BoxNameError(BoxCreateError):
-    pass
-
-
-class BoxPathError(BoxCreateError):
-    pass
-
-
-class BoxCommandError(BoxCreateError):
-    pass
-
-
-class BoxFileError(BoxCreateError):
-    pass
-
-
-class BoxInvalidPackageName(BoxCreateError):
-    pass
-
-
 RE_BOX_NAME = re.compile(r"^\w+(?:\-\w+)*$")
-
-
-PackageInfo = collections.namedtuple(  # pylint: disable=invalid-name
-    "PackageInfo", "name version")
 
 
 PackageRequest = collections.namedtuple(  # pylint: disable=invalid-name
@@ -84,40 +59,6 @@ def make_package_request(package_info, package_path):
         info=package_info,
         path=package_path,
         request=request_fmt.format(p=package_info))
-
-
-def get_package_info_from_path(archive_path):
-    """Get package name from archive path"""
-    archive_path = Path(archive_path)
-    archive_filename = archive_path.name
-    if archive_path.suffix == ".egg":
-        dist = pkg_resources.Distribution.from_location(None, archive_filename)
-        name = dist.project_name
-        version = dist.version
-    else:
-        regex = r"(?P<name>.*?)-(?P<version>\d+(?:\.\d+)+)(?:.*)"
-        match = re.search(regex, archive_filename)
-        if not match:
-            raise BoxInvalidPackageName(archive_path)
-        dct = match.groupdict()
-        name = dct['name']
-        version = dct['version']
-    return PackageInfo(name=name, version=version)
-
-
-def get_package_info_from_requirement(requirement):
-    r_version_spec = re.compile(r"(?:==|~=|!=|<=|>=|<|>|===)")
-    lst = r_version_spec.split(requirement, maxsplit=1)
-    name, version = lst[0], None
-    if len(lst) > 1:
-        version = lst[1]
-    return PackageInfo(name=name, version=version)
-
-
-def get_package_info(package):
-    if isinstance(package, Path) or '/' in package:
-        return get_package_info_from_path(package)
-    return get_package_info_from_requirement(package)
 
 
 def check_box_name(value):
@@ -183,10 +124,10 @@ class PackageRepo:
         for requirement in requirements:
             if '/' in str(requirement):
                 package_path = self.create_package(Path(requirement))
-                package_info = get_package_info_from_path(package_path)
+                package_info = make_package_info_from_path(package_path)
             else:
                 package_path = None
-                package_info = get_package_info_from_requirement(requirement)
+                package_info = make_package_info_from_requirement(requirement)
             package_names.append(package_info.name)
             pkgrequest[package_info.name] = make_package_request(
                 package_info=package_info,
@@ -229,7 +170,7 @@ class PackageRepo:
             run_command(cmdline)
             for package_path in download_dir.glob("*"):
                 if package_path.is_file():
-                    package_info = get_package_info_from_path(package_path)
+                    package_info = make_package_info_from_path(package_path)
                     package_paths.append((package_info.name, package_path))
         else:
             for package_name, package_request in self._pkgrequests.items():
