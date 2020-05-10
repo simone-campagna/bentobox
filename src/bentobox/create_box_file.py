@@ -28,8 +28,7 @@ from .errors import (
     BoxCommandError,
 )
 from .package_info import (
-    make_package_info_from_path,
-    make_package_info_from_requirement,
+    PackageInfo,
 )
 from . import box_file
 
@@ -44,21 +43,6 @@ Hash = hashlib.sha1
 
 
 RE_BOX_NAME = re.compile(r"^\w+(?:\-\w+)*$")
-
-
-PackageRequest = collections.namedtuple(  # pylint: disable=invalid-name
-    "PackageRequest", "info request path")
-
-
-def make_package_request(package_info, package_path):
-    if package_info.version:
-        request_fmt = "{p.name}=={p.version}"
-    else:
-        request_fmt = "{p.name}"
-    return PackageRequest(
-        info=package_info,
-        path=package_path,
-        request=request_fmt.format(p=package_info))
 
 
 def check_box_name(value):
@@ -89,7 +73,7 @@ def run_command(cmdline, raising=True):
 class PackageRepo:
     def __init__(self, tmpdir):
         self.tmpdir = tmpdir
-        self._pkgrequests = {}
+        self._pkginfo = {}
 
     def create_package(self, package_path):
         if not package_path.exists():
@@ -119,26 +103,24 @@ class PackageRepo:
             return dists[0]
 
     def add_requirements(self, requirements):
-        pkgrequest = self._pkgrequests
+        pkginfo = self._pkginfo
         package_names = []
         for requirement in requirements:
             if '/' in str(requirement):
                 package_path = self.create_package(Path(requirement))
-                package_info = make_package_info_from_path(package_path)
+                package_info = PackageInfo.from_package_path(package_path)
             else:
                 package_path = None
-                package_info = make_package_info_from_requirement(requirement)
+                package_info = PackageInfo.from_requirement(requirement)
             package_names.append(package_info.name)
-            pkgrequest[package_info.name] = make_package_request(
-                package_info=package_info,
-                package_path=package_path)
+            pkginfo[package_info.name] = package_info
         return package_names
 
     def get_requirements(self, package_names):
-        pkgrequest = self._pkgrequests
+        pkginfo = self._pkginfo
         requirements = []
         for package_name in package_names:
-            requirements.append(pkgrequest[package_name].request)
+            requirements.append(str(pkginfo[package_name]))
         return requirements
 
     def get_package_paths(self, freeze_pypi=True):
@@ -162,20 +144,20 @@ class PackageRepo:
                 '--implementation', 'py',
                 '--abi', 'none',
             ]
-            for package_request in self._pkgrequests.values():
-                if package_request.path:
-                    cmdline.append(str(package_request.path))
+            for package_info in self._pkginfo.values():
+                if package_info.path:
+                    cmdline.append(str(package_info.path))
                 else:
-                    cmdline.append(package_request.request)
+                    cmdline.append(str(package_info))
             run_command(cmdline)
             for package_path in download_dir.glob("*"):
                 if package_path.is_file():
-                    package_info = make_package_info_from_path(package_path)
+                    package_info = PackageInfo.from_package_path(package_path)
                     package_paths.append((package_info.name, package_path))
         else:
-            for package_name, package_request in self._pkgrequests.items():
-                if package_request.path is not None:
-                    package_paths.append((package_name, package_request.path))
+            for package_name, package_info in self._pkginfo.items():
+                if package_info.path is not None:
+                    package_paths.append((package_name, package_info.path))
         return package_paths
 
 

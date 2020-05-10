@@ -27,6 +27,10 @@ class BoxPackageInfoError(BoxError):
     pass
 
 
+class BoxInvalidVersionSpec(BoxPackageInfoError):
+    pass
+
+
 class BoxInvalidPackagePath(BoxPackageInfoError):
     pass
 
