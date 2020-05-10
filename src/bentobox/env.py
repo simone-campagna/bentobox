@@ -2,15 +2,10 @@
 Environment
 """
 
-import os
-from pathlib import Path
-
 __all__ = [
     'DEFAULT_PYTHON_INTERPRETER',
     'INIT_VENV_PACKAGES',
     'get_bentobox_version',
-    'get_bentobox_home',
-    'get_bentobox_boxes_dir',
 ]
 
 
@@ -22,17 +17,3 @@ BOX_FILE_VERSION = 1
 
 def get_bentobox_version():
     return BENTOBOX_VERSION
-
-BENTOBOX_HOME = os.environ.get("BENTOBOX_HOME", None)
-if BENTOBOX_HOME is None:
-    BENTOBOX_HOME = Path.home().joinpath(".bentobox")
-else:
-    BENTOBOX_HOME = Path(BENTOBOX_HOME).resolve()
-
-
-def get_bentobox_home():
-    return BENTOBOX_HOME
-
-
-def get_bentobox_boxes_dir():
-    return BENTOBOX_HOME.joinpath("boxes")

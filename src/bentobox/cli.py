@@ -38,21 +38,28 @@ def t_python_exe(value):
 
 def function_create(box_name, wrap_info, output_path,
                     packages, update_shebang, check,
-                    python_interpreter, force_overwrite, freeze,
-                    verbose_level, pip_install_args, download):
+                    python_interpreter, force_overwrite,
+                    verbose_level, pip_install_args,
+                    freeze_env, freeze_pypi):
     # pylint: disable=too-many-arguments
     create_box_file(box_name, output_path=output_path, wrap_info=wrap_info,
                     pip_install_args=pip_install_args,
-                    download=download,
+                    freeze_env=freeze_env, freeze_pypi=freeze_pypi,
                     packages=packages, update_shebang=update_shebang,
                     check=check, python_interpreter=python_interpreter,
-                    force_overwrite=force_overwrite, freeze=freeze,
+                    force_overwrite=force_overwrite,
                     verbose_level=verbose_level)
 
 
 def function_show(box_path, mode="text"):
     box_module = load_box_module(box_path)
     box_module.show(mode=mode)  # pylint: disable=no-member
+
+
+def booldef(bool_value, kwargs):
+    if bool_value == kwargs['default']:
+        return ' (default)'
+    return ''
 
 
 def add_create_parser(subparsers):
@@ -63,10 +70,10 @@ Create a box file
 """)
     parser.set_defaults(
         function=function_create,
-        function_args=['box_name', 'wrap_info', 'output_path', 'freeze',
+        function_args=['box_name', 'wrap_info', 'output_path',
                        'packages', 'update_shebang', 'check', 'python_interpreter',
-                       'force_overwrite', 'pip_install_args', 'download',
-                       'verbose_level']
+                       'force_overwrite', 'pip_install_args',
+                       'freeze_env', 'freeze_pypi', 'verbose_level']
     )
     default_verbose_level = 0
     verbose_level_group = parser.add_argument_group("verbose")
@@ -120,13 +127,13 @@ Create a box file
         **wrap_info_kwargs)
 
     box_group.add_argument(
-        "-a", "--pip-install-args",
-        metavar="ARCHIVE",
+        "-a", "--pip-install-arg",
+        dest="pip_install_args",
+        metavar="ARG",
         action="append",
         default=None,
         help="add pip install arg")
 
-    #python_group = box_group.add_argument_group("python interpreter")
     python_mgrp = box_group.add_mutually_exclusive_group()
     python_kwargs = {'dest': 'python_interpreter', 'default': DEFAULT_PYTHON_INTERPRETER}
     python_current = str(Path(sys.executable).absolute())
@@ -144,31 +151,59 @@ Create a box file
              "(defaults to {d!r})".format(d=DEFAULT_PYTHON_INTERPRETER),
         **python_kwargs)
 
-    check_group = box_group.add_argument_group("check")
-    check_mgrp = check_group.add_mutually_exclusive_group()
+    check_mgrp = box_group.add_mutually_exclusive_group()
     check_kwargs = {'dest': 'check', 'default': True}
     check_mgrp.add_argument(
         "-c", "--check",
         action="store_true",
-        help="check box setup and configuration (default)",
+        help="check box setup and configuration" + booldef(True, check_kwargs),
         **check_kwargs)
     check_mgrp.add_argument(
         "-C", "--no-check",
         action="store_false",
-        help="do not check box",
+        help="do not check box" + booldef(False, check_kwargs),
         **check_kwargs)
 
-    box_group.add_argument(
+    update_shebang_mgrp = box_group.add_mutually_exclusive_group()
+    update_shebang_kwargs = {'dest': 'update_shebang', 'default': True}
+    update_shebang_mgrp.add_argument(
+        "-u", "--shebang-update",
+        action="store_true",
+        help="update shebang when installing" + booldef(True, update_shebang_kwargs),
+        **update_shebang_kwargs)
+    update_shebang_mgrp.add_argument(
         "-U", "--no-shebang-update",
-        dest="update_shebang", default=True,
         action="store_false",
-        help="do not update shebang when installing")
+        help="do not update shebang when installing" + booldef(False, update_shebang_kwargs),
+        **update_shebang_kwargs)
 
-    box_group.add_argument(
-        "-F", "--no-freeze",
-        dest="freeze", default=True,
+    freeze_env_mgrp = box_group.add_mutually_exclusive_group()
+    freeze_env_kwargs = {'dest': 'freeze_env', 'default': True}
+    freeze_env_mgrp.add_argument(
+        "-e", "--freeze-env",
+        action="store_true",
+        help="freeze virtualenv environment" + booldef(True, freeze_env_kwargs),
+        **freeze_env_kwargs)
+    freeze_env_mgrp.add_argument(
+        "-E", "--no-freeze-env",
         action="store_false",
-        help="do not freeze virtualenv")
+        help="do not freeze virtualenv environment" + booldef(False, freeze_env_kwargs),
+        **freeze_env_kwargs)
+
+    freeze_pypi_mgrp = box_group.add_mutually_exclusive_group()
+    freeze_pypi_kwargs = {'dest': 'freeze_pypi', 'default': True}
+    freeze_pypi_mgrp.add_argument(
+        "-f", "--freeze-pypi",
+        action="store_true",
+        help="download packages from PyPI along with their dependencies" + \
+             booldef(True, freeze_pypi_kwargs),
+        **freeze_pypi_kwargs)
+    freeze_pypi_mgrp.add_argument(
+        "-F", "--no-freeze-pypi",
+        action="store_false",
+        help="do not download packages from PyPI" + \
+             booldef(False, freeze_pypi_kwargs),
+        **freeze_pypi_kwargs)
 
     parser.add_argument(
         "-o", "--output-path",
@@ -181,12 +216,6 @@ Create a box file
         type=t_box_name,
         required=True,
         help="box name")
-
-    parser.add_argument(
-        "-d", "--download",
-        default=False,
-        action="store_true",
-        help="download packages from PyPI along with their dependencies")
 
     parser.add_argument(
         "packages",
@@ -209,7 +238,7 @@ Show a box file
     )
     mode_group = parser.add_argument_group("mode")
     mode_mgrp = mode_group.add_mutually_exclusive_group()
-    default_mode = "text"
+    default_mode = "json"
     mode_mgrp.add_argument(
         "-j", "--json",
         dest="mode", default=default_mode,

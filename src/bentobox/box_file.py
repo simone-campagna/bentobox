@@ -7,16 +7,19 @@
     "version": "0.1.0",
     "box_file_version": 1,
     "box_name": "box-name",
+    "install_dir": "~/.bentobox/boxes/box-name",
     "python_interpreter": "/usr/bin/env python3",
-    "python_interpreter_orig": null,
-    "install_dir": null,
+    "orig": {
+        "install_dir": null,
+        "python_interpreter": null
+    },
     "wrap_mode": "NONE",
     "wraps": null,
-    "freeze": true,
+    "freeze_env": true,
+    "use_pypi": true,
     "update_shebang": true,
     "verbose_level": 0,
     "pip_install_args": [],
-    "use_pypi": true,
     "init_venv_packages": [
         "setuptools",
         "pip"
@@ -67,6 +70,7 @@ __all__ = [
     'WrapInfo',
     'wrap_single',
     'wrap_multiple',
+    'default_install_dir',
     'create_header',
     'replace_state',
     'show',
@@ -100,6 +104,15 @@ def make_parent_dir(pth):
     pth = Path(pth)
     if not pth.parent.exists():
         pth.parent.mkdir(parents=True)
+
+
+def same_path(pth0, pth1):
+    pth0 = Path(pth0)
+    pth1 = Path(pth1)
+    if pth0.exists() and pth1.exists():
+        return pth0.samefile(pth1)
+    else:
+        return pth0.resolve() == pth1.resolve()
 
 
 Lock = collections.namedtuple(  # pylint: disable=invalid-name
@@ -151,6 +164,7 @@ HEADER_FILL_LEN = 20 * (80 + 1)
 
 _LOG_STATE = None
 
+DEFAULT_INSTALL_ROOT_DIR = Path("~") / ".bentobox" / "boxes"
 
 # initial values:
 VERBOSE_LEVEL = 0
@@ -212,17 +226,18 @@ configure_logging()
 
 VarInfo = collections.namedtuple(  # pylint: disable=invalid-name
     "VarInfo",
-    ["var_name", "var_type", "var_value", "default", "description"])
+    ["var_name", "is_set", "var_type", "var_value", "default", "description"])
 
 ENV_VARS = {}
 
 def get_env_var(var_name, var_type=str, default=None, description=None):
     """Get an environment variable"""
-    var_value = _get_env_var(var_name, var_type, default)
+    is_set, var_value = _get_env_var(var_name, var_type, default)
     ENV_VARS[var_name] = VarInfo(
         var_name=var_name,
         var_type=var_type,
         var_value=var_value,
+        is_set=is_set,
         default=default,
         description=description)
     return var_value
@@ -232,13 +247,13 @@ def _get_env_var(var_name, var_type=str, default=None):
     """Get an environment variable"""
     value = os.environ.get(var_name, None)
     if value is None:
-        return default
+        return False, default
     else:
         try:
-            return var_type(value)
+            return True, var_type(value)
         except (ValueError, TypeError):
             LOG.warning("%s=%r: invalid value", var_name, value)
-            return default
+            return True, default
 
 
 def boolean(value):
@@ -251,8 +266,12 @@ def boolean(value):
     return bool(int(value))
 
 
+def resolved_path(value):
+    return Path(value).resolve()
+
+
 INSTALL_DIR = get_env_var(
-    "BBOX_INSTALL_DIR", var_type=Path, default=None,
+    "BBOX_INSTALL_DIR", var_type=resolved_path, default=None,
     description="set install dir")
 WRAPPING = get_env_var(
     "BBOX_WRAPPING", var_type=boolean, default=True,
@@ -260,9 +279,9 @@ WRAPPING = get_env_var(
 VERBOSE_LEVEL = get_env_var(
     "BBOX_VERBOSE_LEVEL", var_type=int, default=STATE['verbose_level'],
     description="set verbose level")
-FREEZE = get_env_var(
-    "BBOX_FREEZE", var_type=boolean, default=STATE['freeze'],
-    description="enable/disable freezing virtualenv")
+FREEZE_ENV = get_env_var(
+    "BBOX_FREEZE_ENV", var_type=boolean, default=STATE['freeze_env'],
+    description="enable/disable freezing virtualenv environment")
 UPDATE_SHEBANG = get_env_var(
     "BBOX_UPDATE_SHEBANG", var_type=boolean, default=STATE['update_shebang'],
     description="enable/disable update of shebang")
@@ -277,9 +296,11 @@ FORCE_REINSTALL = get_env_var(
 configure_logging(VERBOSE_LEVEL)
 
 
-def default_install_dir():
+def default_install_dir(box_name=None):
     """Returns the default install dir"""
-    return Path.home() / ".bentobox" / "boxes" / STATE['box_name']
+    if box_name is None:
+        box_name = STATE['box_name']
+    return DEFAULT_INSTALL_ROOT_DIR / box_name
 
 
 def get_install_dir():
@@ -289,7 +310,7 @@ def get_install_dir():
     install_dir = STATE['install_dir']
     if install_dir is None:
         install_dir = default_install_dir()
-    return Path(install_dir)
+    return Path(install_dir).expanduser()
 
 
 def get_config():
@@ -646,17 +667,21 @@ def replace_state(output_path, state):
                     output_path_swp.rename(output_path)
 
 
-def _update_box_header(output, python_interpreter):
+def _update_box_header(output, install_dir=None, python_interpreter=None):
     """Update the box header in place"""
-    if not UPDATE_SHEBANG:
-        return
-    if STATE['python_interpreter'] == python_interpreter:
-        return
-    output("replacing shebang...")
     state = STATE.copy()
-    if not state['python_interpreter_orig']:
-        state['python_interpreter_orig'] = state['python_interpreter']
-    state['python_interpreter'] = python_interpreter
+    if (UPDATE_SHEBANG and python_interpreter is not None and
+            python_interpreter != str(python_interpreter)):
+        output("replacing shebang...")
+        if not state['orig']['python_interpreter']:
+            state['orig']['python_interpreter'] = state['python_interpreter']
+        state['python_interpreter'] = python_interpreter
+    if install_dir is not None and (state['install_dir'] is None or
+            not same_path(state['install_dir'], install_dir)):
+        output("replacing install_dir...")
+        if not state['orig']['install_dir']:
+            state['orig']['install_dir'] = state['install_dir']
+        state['install_dir'] = install_dir
     replace_state(__file__, state)
 
 
@@ -664,17 +689,19 @@ def _reset_box_header(output):
     """Reset the box header in place"""
     if not UPDATE_SHEBANG:
         return
-    if STATE['python_interpreter_orig'] is None:
+    if STATE['orig']['python_interpreter'] is None:
         return
     output("resetting shebang...")
     state = STATE.copy()
-    state['python_interpreter'] = state['python_interpreter_orig']
-    state['python_interpreter_orig'] = None
+    state['python_interpreter'] = state['orig']['python_interpreter']
+    state['orig']['python_interpreter'] = None
+    state['install_dir'] = state['orig']['install_dir']
+    state['orig']['install_dir'] = None
     replace_state(__file__, state)
 
 
 def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
-              verbose_level=UNDEFINED, freeze=UNDEFINED,
+              verbose_level=UNDEFINED, freeze_env=UNDEFINED,
               update_shebang=UNDEFINED):
     """Change the STATE and update the file if necessary"""
     state = STATE.copy()
@@ -688,8 +715,8 @@ def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
         state['wraps'] = wrap_info.wraps
     if verbose_level is not UNDEFINED:
         state['verbose_level'] = verbose_level
-    if freeze is not UNDEFINED:
-        state['freeze'] = freeze
+    if freeze_env is not UNDEFINED:
+        state['freeze_env'] = freeze_env
     if update_shebang is not UNDEFINED:
         state['update_shebang'] = update_shebang
     replace_state(output_path, state)
@@ -704,10 +731,8 @@ def uninstall(verbose_level=None):
         _reset_box_header(output)
 
 
-def install(env_file=None, reinstall=None, verbose_level=None, update_shebang=None):
+def install(env_file=None, reinstall=None, verbose_level=None, update_box_header=True):
     """Install the box, if needed"""
-    if update_shebang is None:
-        update_shebang = UPDATE_SHEBANG
 
     install_dir = get_install_dir()
 
@@ -805,7 +830,7 @@ exec {python_exe} "$@"
                         if direntry.is_dir():
                             shutil.rmtree(direntry, ignore_errors=True)
                         else:
-                            if direntry.samefile(config_file.path):
+                            if same_path(direntry, config_file.path):
                                 continue
                             direntry.unlink()
 
@@ -816,7 +841,7 @@ exec {python_exe} "$@"
 
                     output("creating venv {}...".format(venv_dir))
                     venv.create(venv_dir, with_pip=True)
-                    if FREEZE:
+                    if FREEZE_ENV:
                         for python_name in 'python3', 'python':
                             freeze_python(output, venv_bin_dir, python_name)
 
@@ -867,14 +892,20 @@ export PATH="${{PATH}}:{venv_bin_dir}"
             make_parent_dir(env_file)
             shutil.copyfile(bentobox_env_file, env_file)
 
-        if update_shebang:
-            python_interpreter = sys.executable
-            for python_name in 'python3', 'python':
-                python_exe = venv_bin_dir / python_name
-                if python_exe.is_file():
-                    python_interpreter = python_exe
-                    break
-            _update_box_header(output, str(python_interpreter))
+        if update_box_header:
+            updates = {}
+            if UPDATE_SHEBANG:
+                python_interpreter = sys.executable
+                for python_name in 'python3', 'python':
+                    python_exe = venv_bin_dir / python_name
+                    if python_exe.is_file():
+                        python_interpreter = python_exe
+                        break
+                updates['python_interpreter'] = python_interpreter
+            if not same_path(install_dir, default_install_dir()):
+                updates['install_dir'] = install_dir
+            if updates:
+                _update_box_header(output, **updates)
 
     if not do_install:
         config = get_config()
@@ -1015,7 +1046,7 @@ def check(install_dir=None):
             check(Path(tmpd) / "bentobox_install_dir")
             return
     with set_install_dir(install_dir):
-        install(update_shebang=False)
+        install(update_box_header=False)
         wrap_info = get_wrap_info()
         check_wrap_info(wrap_info)
 
@@ -1035,6 +1066,8 @@ Box: {box_name} [{box_type}]
   + install_dir = {install_dir}{actual_install_dir}
   + wrap_mode = {wrap_mode}
   + wraps = {wraps}
+  + freeze_env = {freeze_env}
+  + use_pypi = {use_pypi}
   + pip_install_args = {pip_install_args}
   + update_shebang = {update_shebang}
   + packages:""".format(actual_install_dir=actual_install_dir, box_type=box_type, **STATE))
@@ -1053,11 +1086,11 @@ Box: {box_name} [{box_type}]
 ################################################################################
 
 def cmd_configure(output_path, install_dir, wrap_info=UNDEFINED, update_shebang=UNDEFINED,
-                  verbose_level=UNDEFINED, freeze=UNDEFINED):
+                  verbose_level=UNDEFINED, freeze_env=UNDEFINED):
     """Configure command"""
     return configure(output_path, install_dir, wrap_info=wrap_info,
                      verbose_level=verbose_level,
-                     update_shebang=update_shebang, freeze=freeze)
+                     update_shebang=update_shebang, freeze_env=freeze_env)
 
 
 def cmd_extract(hashlist, output_dir=None, verbose_level=None):
@@ -1069,13 +1102,13 @@ def cmd_extract(hashlist, output_dir=None, verbose_level=None):
         verbose_level=verbose_level)
 
 
-def cmd_install(env_file, reinstall=False, update_shebang=None, verbose_level=None):
+def cmd_install(env_file, reinstall=False, update_box_header=True, verbose_level=None):
     """Install command"""
     verbose_level = get_verbose_level(verbose_level)
     reinstalled, config = install(
         env_file=env_file,
         reinstall=reinstall,
-        update_shebang=update_shebang,
+        update_box_header=update_box_header,
         verbose_level=verbose_level)
 
     if config is None:
@@ -1208,21 +1241,37 @@ Box {box_name!r} - configure box script
     parser.set_defaults(
         function=cmd_configure,
         function_args=['install_dir', 'output_path', 'wrap_info', 'verbose_level',
-                       'freeze', 'update_shebang'],
+                       'freeze_env', 'update_shebang'],
     )
     add_common_arguments(parser)
 
-    parser.add_argument(
-        "-F", "--no-freeze",
-        dest="freeze", default=UNDEFINED,
+    freeze_env_group = parser.add_argument_group("freeze virtualenv environment")
+    freeze_env_mgrp = freeze_env_group.add_mutually_exclusive_group()
+    freeze_env_kwargs = {'dest': 'freeze_env', 'default': STATE.get('freeze_env', None)}
+    freeze_env_mgrp.add_argument(
+        "-e", "--freeze-env",
+        action="store_true",
+        help="freeze virtualenv",
+        **freeze_env_kwargs)
+    freeze_env_mgrp.add_argument(
+        "-E", "--no-freeze-env",
         action="store_false",
-        help="do not freeze virtualenv")
+        help="do not freeze virtualenv",
+        **freeze_env_kwargs)
 
-    parser.add_argument(
-        "-U", "--no-update-shebang",
-        dest="update_shebang", default=UNDEFINED,
+    update_shebang_group = parser.add_argument_group("shebang")
+    update_shebang_mgrp = update_shebang_group.add_mutually_exclusive_group()
+    update_shebang_kwargs = {'dest': 'update_shebang', 'default': STATE.get('update_shebang', None)}
+    update_shebang_mgrp.add_argument(
+        "-u", "--shebang-update",
+        action="store_true",
+        help="update shebang when installing",
+        **update_shebang_kwargs)
+    update_shebang_mgrp.add_argument(
+        "-U", "--no-shebang-update",
         action="store_false",
-        help="do not update shebang")
+        help="do not update shebang when installing",
+        **update_shebang_kwargs)
 
     install_dir_group = parser.add_argument_group("install_dir")
     install_dir_mgrp = install_dir_group.add_mutually_exclusive_group()
@@ -1389,40 +1438,13 @@ Box {box_name!r} - install box
 """.format(**STATE))
     parser.set_defaults(
         function=cmd_install,
-        function_args=['env_file', 'reinstall', 'verbose_level', 'update_shebang'],
+        function_args=['env_file', 'reinstall', 'verbose_level'],
     )
     add_common_arguments(parser)
     add_reinstall_argument(parser)
-    freeze_group = parser.add_argument_group("freeze")
-    freeze_mgrp = freeze_group.add_mutually_exclusive_group()
-    freeze_kwargs = {'dest': 'freeze', 'default': STATE.get('freeze', None)}
-    freeze_mgrp.add_argument(
-        "-f", "--freeze",
-        action="store_true",
-        help="freeze virtualenv",
-        **freeze_kwargs)
-    freeze_mgrp.add_argument(
-        "-F", "--no-freeze",
-        action="store_false",
-        help="do not freeze virtualenv",
-        **freeze_kwargs)
-
-    update_shebang_group = parser.add_argument_group("shebang")
-    update_shebang_mgrp = update_shebang_group.add_mutually_exclusive_group()
-    update_shebang_kwargs = {'dest': 'update_shebang', 'default': STATE.get('update_shebang', None)}
-    update_shebang_mgrp.add_argument(
-        "-s", "--shebang-update",
-        action="store_true",
-        help="update shebang when installing",
-        **update_shebang_kwargs)
-    update_shebang_mgrp.add_argument(
-        "-S", "--no-shebang-update",
-        action="store_false",
-        help="do not update shebang when installing",
-        **update_shebang_kwargs)
 
     parser.add_argument(
-        "-e", "--env-file",
+        "-F", "--env-file",
         type=Path, default=None,
         help="write env file")
     return parser
@@ -1455,7 +1477,7 @@ Box {box_name!r} - show box state
     add_common_arguments(parser)
     mode_group = parser.add_argument_group("mode")
     mode_mgrp = mode_group.add_mutually_exclusive_group()
-    default_mode = "text"
+    default_mode = "json"
     mode_mgrp.add_argument(
         "-j", "--json",
         dest="mode", default=default_mode,

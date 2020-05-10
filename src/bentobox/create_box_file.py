@@ -102,7 +102,6 @@ def get_package_info_from_path(archive_path):
         dct = match.groupdict()
         name = dct['name']
         version = dct['version']
-    print(archive_path, "->", PackageInfo(name=name, version=version))
     return PackageInfo(name=name, version=version)
 
 
@@ -201,9 +200,9 @@ class PackageRepo:
             requirements.append(pkgrequest[package_name].request)
         return requirements
 
-    def get_package_paths(self, download=True):
+    def get_package_paths(self, freeze_pypi=True):
         package_paths = []
-        if download:
+        if freeze_pypi:
             pip_dir = self.tmpdir / 'pip-{}'.format(uuid.uuid4().hex)
             download_dir = pip_dir / 'downloads'
             build_dir = pip_dir / 'build'
@@ -241,8 +240,8 @@ class PackageRepo:
 
 def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
                     packages=(), init_venv_packages=None,
-                    pip_install_args=None, download=False,
-                    update_shebang=True, check=True, freeze=True,
+                    pip_install_args=None, update_shebang=True, check=True,
+                    freeze_env=True, freeze_pypi=True,
                     python_interpreter=DEFAULT_PYTHON_INTERPRETER,
                     force_overwrite=False, verbose_level=1):
     # pylint: disable=too-many-arguments
@@ -277,7 +276,7 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
         init_package_names = pkg_repo.add_requirements(init_venv_packages)
         user_package_names = pkg_repo.add_requirements(packages)
 
-        package_paths = pkg_repo.get_package_paths(download=download)
+        package_paths = pkg_repo.get_package_paths(freeze_pypi=freeze_pypi)
 
         package_paths.sort(key=lambda x: x[1])
         package_paths.sort(key=lambda x: x[0])
@@ -295,14 +294,17 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
             "box_file_version": BOX_FILE_VERSION,
             "box_name": box_name,
             "python_interpreter": python_interpreter,
-            "python_interpreter_orig": None,
-            "install_dir": None,
+            "install_dir": box_file.default_install_dir(box_name),
+            "orig": {
+                "install_dir": None,
+                "python_interpreter": None,
+            },
             "wrap_mode": wrap_info.wrap_mode.name,
             "wraps": wrap_info.wraps,
-            "freeze": freeze,
+            "freeze_env": freeze_env,
+            "use_pypi": not freeze_pypi,
             "update_shebang": update_shebang,
             "verbose_level": int(verbose_level),
-            "use_pypi": not download,
             "pip_install_args": pip_install_args,
             "init_venv_packages": init_packages,
             "packages": user_packages,
