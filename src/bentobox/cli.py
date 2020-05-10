@@ -13,7 +13,7 @@ from .env import (
     DEFAULT_PYTHON_INTERPRETER,
     get_bentobox_version,
 )
-from .util import load_box_module
+from .util import load_py_module
 from .box_file import (
     wrap_single,
     wrap_multiple,
@@ -52,7 +52,7 @@ def function_create(box_name, wrap_info, output_path,
 
 
 def function_show(box_path, mode="text"):
-    box_module = load_box_module(box_path)
+    box_module = load_py_module(box_path)
     box_module.show(mode=mode)  # pylint: disable=no-member
 
 

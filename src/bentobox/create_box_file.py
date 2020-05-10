@@ -14,7 +14,7 @@ import uuid
 from base64 import b64encode
 from pathlib import Path
 
-from .util import load_box_module
+from .util import load_py_module
 from .env import (
     DEFAULT_PYTHON_INTERPRETER,
     INIT_VENV_PACKAGES,
@@ -299,5 +299,5 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
 
 
 def check_box(box_path, install_dir=None):
-    box_module = load_box_module(box_path)
+    box_module = load_py_module(box_path)
     box_module.check(install_dir)  # pylint: disable=no-member
