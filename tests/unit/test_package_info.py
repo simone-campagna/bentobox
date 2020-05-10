@@ -1,3 +1,5 @@
+from unittest import mock
+
 import pytest
 
 from bentobox.package_info import (
@@ -20,6 +22,7 @@ from bentobox.errors import (
     ("./alpha-1.2.3.tar.gz", PackageInfo(name="alpha", version="1.2.3")),
     ("/tmp/uu345/alpha-1.2.3.tar.gz", PackageInfo(name="alpha", version="1.2.3")),
     ("alpha-1.2.3-py3-none-any.whl", PackageInfo(name="alpha", version="1.2.3")),
+    ("alpha-1.2.3-py3.6.egg", PackageInfo(name="alpha", version="1.2.3")),
 ])
 def test_make_package_info_from_path(package_path, result):
     assert make_package_info_from_path(package_path) == result
@@ -57,3 +60,29 @@ def test_make_package_info_from_requirement_error(requirement, error):
     with pytest.raises(type(error)) as exc_info:
         make_package_info_from_requirement(requirement)
     assert str(exc_info.value) == str(error)
+
+
+@pytest.mark.parametrize("arg, fname", [
+    ("alpha-1.2.3.tar.gz", 'requirement'),
+    ("./alpha-1.2.3.tar.gz", 'package_path'),
+    ("alpha", 'requirement'),
+    (".alpha", 'requirement'),
+    ("alpha.beta", 'requirement'),
+    ("alpha/beta", 'package_path'),
+    ("alpha==1.2.3", 'requirement'),
+])
+def test_make_package_info(arg, fname):
+    mmd = {
+        'package_path': mock.MagicMock(),
+        'requirement': mock.MagicMock(),
+    }
+    with mock.patch('bentobox.package_info.make_package_info_from_path', mmd['package_path']):
+        with mock.patch('bentobox.package_info.make_package_info_from_requirement', mmd['requirement']):
+            make_package_info(arg)
+    for key, mm in mmd.items():
+        if key == fname:
+            # assert mm.call_count == 1
+            assert mm.call_args == ((arg,),)
+        else:
+            # assert mm.call_count == 0
+            assert mm.call_args == None

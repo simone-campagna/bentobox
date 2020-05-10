@@ -39,6 +39,8 @@ def make_package_info_from_path(package_path):
        PackageInfo(name='alpha', version='1.2.3')
        >>> make_package_info_from_path('alpha-1.2.3-py3-none-any.whl')
        PackageInfo(name='alpha', version='1.2.3')
+       >>> make_package_info_from_path('alpha-1.2.3-py3.6.egg')
+       PackageInfo(name='alpha', version='1.2.3')
 
        Paramenters
        -----------
