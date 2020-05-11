@@ -77,6 +77,7 @@ __all__ = [
     'check',
     'install',
     'extract',
+    'build_pypi_index',
 ]
 
 # pylint: disable=too-many-lines
@@ -944,7 +945,7 @@ PACKAGE_INDEX_SOURCE = """\
 """
 
 
-def build_pypi_simple(repo_dir, package_data, pypi_dir=None):
+def build_pypi_index(repo_dir, package_files, pypi_dir=None):
     repo_dir = Path(repo_dir).resolve()
     if pypi_dir is None:
         pypi_dir = repo_dir / 'simple'
@@ -952,7 +953,7 @@ def build_pypi_simple(repo_dir, package_data, pypi_dir=None):
     pypi_dir.mkdir(parents=True)
     pypi_index_path = pypi_dir / 'index.html'
     content = []
-    for package_name, package_filename, _ in package_data:
+    for package_name, package_filename in package_files:
         content.append(PACKAGE_REF_SOURCE.format(package_name=package_name))
         package_path = repo_dir / package_filename
         package_dir = pypi_dir / package_name
@@ -978,7 +979,7 @@ def _extract(output, hashlist, output_dir):
         output("creating output dir {}...".format(output_dir))
         output_dir.mkdir()
     output("reading repo packages from {}...".format(__file__))
-    package_data = []
+    package_files = []
     package_filename = None
     package_name = None
     package_hash = None
@@ -1013,7 +1014,7 @@ def _extract(output, hashlist, output_dir):
                             package_file.close()
                         package_path = output_dir / package_filename
                         make_parent_dir(package_path)
-                        package_data.append((package_name, package_filename, package_hash))
+                        package_files.append((package_name, package_filename))
                         output("extracting package {} [{}]...".format(
                             package_filename, package_hash))
                         package_file = open(package_path, 'wb')
@@ -1028,7 +1029,7 @@ def _extract(output, hashlist, output_dir):
     finally:
         if package_file:
             package_file.close()
-    return build_pypi_simple(output_dir, package_data)
+    return build_pypi_index(output_dir, package_files)
 
 
 def extract(hashlist, output_dir=None, verbose_level=None):

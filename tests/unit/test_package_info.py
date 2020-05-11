@@ -21,7 +21,6 @@ def test_VersionSpec():
 def test_PackageInfo(package_path):
     package_info = PackageInfo(
         name="alpha",
-        path=package_path,
         version_specs=[
             VersionSpec('>=', '1.2.3'),
             VersionSpec('<', '2.0.0'),
@@ -34,30 +33,30 @@ def test_PackageInfo(package_path):
 
 
 @pytest.mark.parametrize("package_path, result",  [
-    ("alpha-1.2.3.tar.gz", PackageInfo(name="alpha",
-        path="alpha-1.2.3.tar.gz", version_specs=[
-        VersionSpec(operator="===", version="1.2.3")])),
-    ("alpha-beta-1.2.3.tar.gz", PackageInfo(name="alpha-beta",
-        path="alpha-beta-1.2.3.tar.gz", version_specs=[
-        VersionSpec(operator="===", version="1.2.3")])),
-    ("alpha_beta-1.2.3.tar.gz", PackageInfo(name="alpha_beta",
-        path="alpha_beta-1.2.3.tar.gz", version_specs=[
-        VersionSpec(operator="===", version="1.2.3")])),
-    ("alpha/beta-1.2.3.tar.gz", PackageInfo(name="beta",
-        path="alpha/beta-1.2.3.tar.gz", version_specs=[
-        VersionSpec(operator="===", version="1.2.3")])),
-    ("./alpha-1.2.3.tar.gz", PackageInfo(name="alpha",
-        path="./alpha-1.2.3.tar.gz", version_specs=[
-        VersionSpec(operator="===", version="1.2.3")])),
-    ("/tmp/uu345/alpha-1.2.3.tar.gz", PackageInfo(name="alpha",
-        path="/tmp/uu345/alpha-1.2.3.tar.gz", version_specs=[
-        VersionSpec(operator="===", version="1.2.3")])),
-    ("alpha-1.2.3-py3-none-any.whl", PackageInfo(name="alpha",
-        path="alpha-1.2.3-py3-none-any.whl", version_specs=[
-        VersionSpec(operator="===", version="1.2.3")])),
-    ("alpha-1.2.3-py3.6.egg", PackageInfo(name="alpha",
-        path="alpha-1.2.3-py3.6.egg", version_specs=[
-        VersionSpec(operator="===", version="1.2.3")])),
+    ("alpha-1.2.3.tar.gz",
+     PackageInfo(name="alpha",
+                 version_specs=[VersionSpec(operator="===", version="1.2.3")])),
+    ("alpha-beta-1.2.3.tar.gz",
+     PackageInfo(name="alpha-beta",
+                 version_specs=[VersionSpec(operator="===", version="1.2.3")])),
+    ("alpha_beta-1.2.3.tar.gz",
+     PackageInfo(name="alpha_beta",
+                 version_specs=[VersionSpec(operator="===", version="1.2.3")])),
+    ("alpha/beta-1.2.3.tar.gz",
+     PackageInfo(name="beta",
+                 version_specs=[VersionSpec(operator="===", version="1.2.3")])),
+    ("./alpha-1.2.3.tar.gz",
+     PackageInfo(name="alpha",
+                 version_specs=[VersionSpec(operator="===", version="1.2.3")])),
+    ("/tmp/uu345/alpha-1.2.3.tar.gz",
+     PackageInfo(name="alpha",
+                 version_specs=[VersionSpec(operator="===", version="1.2.3")])),
+    ("alpha-1.2.3-py3-none-any.whl",
+     PackageInfo(name="alpha",
+                 version_specs=[VersionSpec(operator="===", version="1.2.3")])),
+    ("alpha-1.2.3-py3.6.egg",
+     PackageInfo(name="alpha",
+                 version_specs=[VersionSpec(operator="===", version="1.2.3")])),
 ])
 def test_PackageInfo_from_package_path(package_path, result):
     assert PackageInfo.from_package_path(package_path) == result
@@ -75,22 +74,22 @@ def test_PackageInfo_from_package_path_error(package_path, error):
 
 
 @pytest.mark.parametrize("requirement, result",  [
-    ("alpha", PackageInfo(name="alpha", path=None, version_specs=[])),
-    ("alpha==1.2.3", PackageInfo(name="alpha", path=None, version_specs=[
+    ("alpha", PackageInfo(name="alpha", version_specs=[])),
+    ("alpha==1.2.3", PackageInfo(name="alpha", version_specs=[
         VersionSpec(operator="==", version="1.2.3")])),
-    ("alpha>=1.2.3", PackageInfo(name="alpha", path=None, version_specs=[
+    ("alpha>=1.2.3", PackageInfo(name="alpha", version_specs=[
         VersionSpec(operator=">=", version="1.2.3")])),
-    ("alpha>1.2.3", PackageInfo(name="alpha", path=None, version_specs=[
+    ("alpha>1.2.3", PackageInfo(name="alpha", version_specs=[
         VersionSpec(operator=">", version="1.2.3")])),
-    ("alpha<1.2.3", PackageInfo(name="alpha", path=None, version_specs=[
+    ("alpha<1.2.3", PackageInfo(name="alpha", version_specs=[
         VersionSpec(operator="<", version="1.2.3")])),
-    ("alpha~=1.2.3", PackageInfo(name="alpha", path=None, version_specs=[
+    ("alpha~=1.2.3", PackageInfo(name="alpha", version_specs=[
         VersionSpec(operator="~=", version="1.2.3")])),
-    ("alpha!=1.2.3", PackageInfo(name="alpha", path=None, version_specs=[
+    ("alpha!=1.2.3", PackageInfo(name="alpha", version_specs=[
         VersionSpec(operator="!=", version="1.2.3")])),
-    ("alpha===a.b.c", PackageInfo(name="alpha", path=None, version_specs=[
+    ("alpha===a.b.c", PackageInfo(name="alpha", version_specs=[
         VersionSpec(operator="===", version="a.b.c")])),
-    ("alpha>=1.2.3,<=1.8.0,~=1.5.*", PackageInfo(name="alpha", path=None, version_specs=[
+    ("alpha>=1.2.3,<=1.8.0,~=1.5.*", PackageInfo(name="alpha", version_specs=[
         VersionSpec(operator=">=", version="1.2.3"),
         VersionSpec(operator="<=", version="1.8.0"),
         VersionSpec(operator="~=", version="1.5.*")])),

@@ -4,17 +4,11 @@ Create a box file
 
 import collections
 import hashlib
-import os
 import re
-import shlex
-import subprocess
-import sys
 import tempfile
-import uuid
 from base64 import b64encode
 from pathlib import Path
 
-from .util import load_py_module
 from .env import (
     DEFAULT_PYTHON_INTERPRETER,
     INIT_VENV_PACKAGES,
@@ -23,12 +17,11 @@ from .env import (
 )
 from .errors import (
     BoxNameError,
-    BoxPathError,
     BoxFileError,
-    BoxCommandError,
 )
-from .package_info import (
-    PackageInfo,
+from .package_repo import PackageRepo
+from .util import (
+    load_py_module,
 )
 from . import box_file
 
@@ -49,116 +42,6 @@ def check_box_name(value):
     if not RE_BOX_NAME.match(value):
         raise BoxNameError(value)
     return value
-
-
-def run_command(cmdline, raising=True):
-    result = subprocess.run(cmdline, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            check=False)
-    clist = [cmdline[0]] + [shlex.quote(arg) for arg in cmdline[1:]]
-    # if True:
-    #     cmd = " ".join(clist)
-    #     print("$ {}".format(cmd), file=sys.stderr)
-    #     print(result.stdout, file=sys.stderr)
-    if result.returncode:
-        cmd = " ".join(clist)
-        if raising:
-            print("$ {}".format(cmd), file=sys.stderr)
-            print(str(result.stdout, 'utf-8'), file=sys.stderr)
-            raise BoxCommandError("command {} failed".format(cmd))
-        print("ERR: command {} failed:".format(cmd), file=sys.stderr)
-        print(str(result.stdout, 'utf-8'), file=sys.stderr)
-    return result.returncode
-
-
-class PackageRepo:
-    def __init__(self, tmpdir):
-        self.tmpdir = tmpdir
-        self._pkginfo = {}
-
-    def create_package(self, package_path):
-        if not package_path.exists():
-            raise BoxPathError("path {} does not exist".format(package_path))
-        tmpdir = self.tmpdir
-        if package_path.is_file():
-            return package_path
-        else:
-            setup_py_path = (package_path / "setup.py").resolve()
-            if not setup_py_path.is_file():
-                raise BoxPathError("path {} does not exist".format(package_path))
-            pkg_tmpdir = tmpdir / uuid.uuid4().hex
-            pkg_tmpdir.mkdir()
-            old_cwd = Path.cwd()
-            try:
-                os.chdir(setup_py_path.parent)
-                cmdline = [sys.executable, str(setup_py_path), "sdist",
-                           "--dist-dir", str(pkg_tmpdir)]
-                run_command(cmdline)
-            finally:
-                os.chdir(old_cwd)
-            dists = list(pkg_tmpdir.glob("*"))
-            if not dists:
-                raise BoxPathError("path {}: dist file not found".format(package_path))
-            if len(dists) != 1:
-                raise BoxPathError("path {}: too many dist files found".format(package_path))
-            return dists[0]
-
-    def add_requirements(self, requirements):
-        pkginfo = self._pkginfo
-        package_names = []
-        for requirement in requirements:
-            if '/' in str(requirement):
-                package_path = self.create_package(Path(requirement))
-                package_info = PackageInfo.from_package_path(package_path)
-            else:
-                package_path = None
-                package_info = PackageInfo.from_requirement(requirement)
-            package_names.append(package_info.name)
-            pkginfo[package_info.name] = package_info
-        return package_names
-
-    def get_requirements(self, package_names):
-        pkginfo = self._pkginfo
-        requirements = []
-        for package_name in package_names:
-            requirements.append(str(pkginfo[package_name]))
-        return requirements
-
-    def get_package_paths(self, freeze_pypi=True):
-        package_paths = []
-        if freeze_pypi:
-            pip_dir = self.tmpdir / 'pip-{}'.format(uuid.uuid4().hex)
-            download_dir = pip_dir / 'downloads'
-            build_dir = pip_dir / 'build'
-            src_dir = pip_dir / 'src'
-            for ddir in download_dir, build_dir, src_dir:
-                if not ddir.is_dir():
-                    ddir.mkdir(parents=True)
-            cmdline = [
-                'pip', 'download',
-                '--only-binary', ':all:',
-                '--dest', str(download_dir),
-                '--build', str(build_dir),
-                '--src', str(src_dir),
-                '--platform', 'any',
-                '--python-version', '3',
-                '--implementation', 'py',
-                '--abi', 'none',
-            ]
-            for package_info in self._pkginfo.values():
-                if package_info.path:
-                    cmdline.append(str(package_info.path))
-                else:
-                    cmdline.append(str(package_info))
-            run_command(cmdline)
-            for package_path in download_dir.glob("*"):
-                if package_path.is_file():
-                    package_info = PackageInfo.from_package_path(package_path)
-                    package_paths.append((package_info.name, package_path))
-        else:
-            for package_name, package_info in self._pkginfo.items():
-                if package_info.path is not None:
-                    package_paths.append((package_name, package_info.path))
-        return package_paths
 
 
 def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
@@ -195,7 +78,7 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
             output_path.parent.mkdir(parents=True)
 
 
-        pkg_repo = PackageRepo(tmpdir=tmpdir)
+        pkg_repo = PackageRepo(workdir=tmpdir)
         init_package_names = pkg_repo.add_requirements(init_venv_packages)
         user_package_names = pkg_repo.add_requirements(packages)
 

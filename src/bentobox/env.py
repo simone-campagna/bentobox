@@ -3,12 +3,14 @@ Environment
 """
 
 __all__ = [
+    'DEFAULT_PYPI_INDEX_URL',
     'DEFAULT_PYTHON_INTERPRETER',
     'INIT_VENV_PACKAGES',
     'get_bentobox_version',
 ]
 
 
+DEFAULT_PYPI_INDEX_URL = 'https://pypi.org/simple'
 DEFAULT_PYTHON_INTERPRETER = '/usr/bin/env python3'
 INIT_VENV_PACKAGES = ('setuptools', 'pip')
 

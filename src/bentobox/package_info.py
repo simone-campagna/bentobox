@@ -58,7 +58,7 @@ class VersionSpec(collections.namedtuple("_VersionSpec", "operator version")):
         return cls(operator=match.group('operator'), version=match.group('version'))
 
 
-class PackageInfo(collections.namedtuple("_PackageInfo", "name path version_specs")):
+class PackageInfo(collections.namedtuple("_PackageInfo", "name version_specs")):
     def __str__(self):
         return '{}{}'.format(
             self.name,
@@ -69,11 +69,11 @@ class PackageInfo(collections.namedtuple("_PackageInfo", "name path version_spec
         """Make package info from package path
 
            >>> PackageInfo.from_package_path('alpha-1.2.3.tar.gz')  #doctest: +ELLIPSIS
-           PackageInfo(name='alpha', path='alpha-1.2.3.tar.gz', version_specs=[...])
+           PackageInfo(name='alpha', version_specs=[...])
            >>> PackageInfo.from_package_path('alpha-1.2.3-py3-none-any.whl')  #doctest: +ELLIPSIS
-           PackageInfo(name='alpha', path='alpha-1.2.3-py3-none-any.whl', version_specs=[...])
+           PackageInfo(name='alpha', version_specs=[...])
            >>> PackageInfo.from_package_path('alpha-1.2.3-py3.6.egg')  #doctest: +ELLIPSIS
-           PackageInfo(name='alpha', path='alpha-1.2.3-py3.6.egg', version_specs=[...])
+           PackageInfo(name='alpha', version_specs=[...])
 
            Paramenters
            -----------
@@ -105,7 +105,6 @@ class PackageInfo(collections.namedtuple("_PackageInfo", "name path version_spec
             version = dct['version']
         return cls(
             name=name,
-            path=package_path,
             version_specs=[VersionSpec(operator='===', version=version)])
 
     @classmethod
@@ -113,11 +112,11 @@ class PackageInfo(collections.namedtuple("_PackageInfo", "name path version_spec
         """Make package info from requirement specification
 
            >>> PackageInfo.from_requirement('alpha')
-           PackageInfo(name='alpha', path=None, version_specs=[])
+           PackageInfo(name='alpha', version_specs=[])
            >>> PackageInfo.from_requirement('alpha==1.2.3')  #doctest: +ELLIPSIS
-           PackageInfo(name='alpha', path=None, version_specs=[...])
+           PackageInfo(name='alpha', version_specs=[...])
            >>> PackageInfo.from_requirement('alpha>1.2.3')  #doctest: +ELLIPSIS
-           PackageInfo(name='alpha', path=None, version_specs=[...])
+           PackageInfo(name='alpha', version_specs=[...])
 
            Paramenters
            -----------
@@ -156,7 +155,6 @@ class PackageInfo(collections.namedtuple("_PackageInfo", "name path version_spec
             raise BoxInvalidRequirement(requirement)
         return cls(
             name=name,
-            path=None,
             version_specs=version_specs)
 
     @classmethod
@@ -164,11 +162,11 @@ class PackageInfo(collections.namedtuple("_PackageInfo", "name path version_spec
         """Make PackageInfo from a request string (requirement or package path)
 
            >>> PackageInfo.from_request_string('alpha')
-           PackageInfo(name='alpha', path=None, version_specs=[])
+           PackageInfo(name='alpha', version_specs=[])
            >>> PackageInfo.from_request_string('alpha==1.2.3')  #doctest: +ELLIPSIS
-           PackageInfo(name='alpha', path=None, version_specs=[...])
+           PackageInfo(name='alpha', version_specs=[...])
            >>> PackageInfo.from_request_string('./alpha-1.2.3.tar.gz')  #doctest: +ELLIPSIS
-           PackageInfo(name='alpha', path='./alpha-1.2.3.tar.gz', version_specs=[...])
+           PackageInfo(name='alpha', version_specs=[...])
            >>> PackageInfo.from_request_string('alpha-1.2.3.tar.gz')  #doctest: +ELLIPSIS
            Traceback (most recent call last):
             ...
