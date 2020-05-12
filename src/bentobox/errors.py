@@ -19,10 +19,6 @@ class BoxCommandError(BoxError):
     pass
 
 
-class BoxFileError(BoxError):
-    pass
-
-
 class BoxPackageInfoError(BoxError):
     pass
 

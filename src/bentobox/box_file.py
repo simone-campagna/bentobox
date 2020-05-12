@@ -260,9 +260,9 @@ def _get_env_var(var_name, var_type=str, default=None):
 def boolean(value):
     """Make a boolean value from a string"""
     value = value.lower()
-    if value in {'on', 'true'}:
+    if value in {'yes', 'on', 'true'}:
         return True
-    if value in {'off', 'false'}:
+    if value in {'no', 'off', 'false'}:
         return False
     return bool(int(value))
 

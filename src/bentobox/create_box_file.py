@@ -17,7 +17,7 @@ from .env import (
 )
 from .errors import (
     BoxNameError,
-    BoxFileError,
+    BoxPathError,
 )
 from .package_repo import PackageRepo
 from .util import (
@@ -35,7 +35,7 @@ __all__ = [
 Hash = hashlib.sha1
 
 
-RE_BOX_NAME = re.compile(r"^\w+(?:\-\w+)*$")
+RE_BOX_NAME = re.compile(r"^[a-zA-Z_]+\w*(?:\-\w+)*$")
 
 
 def check_box_name(value):
@@ -49,10 +49,12 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
                     pip_install_args=None, update_shebang=True, check=True,
                     freeze_env=True, freeze_pypi=True,
                     python_interpreter=DEFAULT_PYTHON_INTERPRETER,
-                    force_overwrite=False, verbose_level=1):
+                    force_overwrite=False, verbose_level=None):
     # pylint: disable=too-many-arguments
     if init_venv_packages is None:
         init_venv_packages = INIT_VENV_PACKAGES
+    if verbose_level is None:
+        verbose_level = box_file.VERBOSE_LEVEL
     if wrap_info is None:
         wrap_info = box_file.WrapInfo(box_file.WrapMode.NONE, None)
     box_name = check_box_name(box_name)
@@ -64,7 +66,7 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
         if force_overwrite:
             output_path.unlink()
         else:
-            raise BoxFileError("file {!r} already exists".format(str(output_path)))
+            raise BoxPathError("file {!r} already exists".format(str(output_path)))
 
     with tempfile.TemporaryDirectory() as tmpd:
         tmpdir = Path(tmpd)
@@ -161,6 +163,7 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
 
         if check:
             check_box(output_path, tmpdir / "bentobox_install_dir")
+    return output_path
 
 
 def check_box(box_path, install_dir=None):

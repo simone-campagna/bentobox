@@ -51,7 +51,7 @@ def function_create(box_name, wrap_info, output_path,
                     verbose_level=verbose_level)
 
 
-def function_show(box_path, mode="text"):
+def function_show(box_path, mode):
     box_module = load_py_module(box_path)
     box_module.show(mode=mode)  # pylint: disable=no-member
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from importlib.util import spec_from_file_location, module_from_spec
 
-from .errors import BoxCommandError
+from .errors import BoxCommandError, BoxPathError
 
 __all__ = [
     'load_py_module',
@@ -18,6 +18,8 @@ __all__ = [
 
 def load_py_module(module_path):
     module_path = Path(module_path).resolve()
+    if not module_path.is_file():
+        raise BoxPathError(module_path)
     return _load_py_module(module_path)
 
 

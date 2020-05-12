@@ -9,6 +9,7 @@ import pytest
 
 from bentobox.errors import (
     BoxCommandError,
+    BoxPathError,
 )
 from bentobox.util import (
     load_py_module,
@@ -28,6 +29,13 @@ def foo(i, j):
         mod = load_py_module(mod_path)
         assert mod.__name__ == "mymod"
         assert mod.foo(2, 4) == 8
+
+
+def test_load_py_module_error():
+    with tempfile.TemporaryDirectory() as tmpd:
+        mod_path = Path(tmpd) / "mymod"
+        with pytest.raises(BoxPathError) as exc_info:
+            mod = load_py_module(mod_path)
 
 
 def mk_cmd(cmdline):

@@ -28,7 +28,10 @@ if __name__ == "__main__":
         description="Self-installable python executables",
         author="Simone Campagna",
         author_email="simone.campagna11@gmail.com",
-        install_requires=[],
+        install_requires=[
+            "setuptools>=39.0.0",
+            "pip>=20.1",
+        ],
         url='',
         download_url = '',
         package_dir={'': 'src'},
