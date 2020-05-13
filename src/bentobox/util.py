@@ -1,4 +1,5 @@
 import functools
+import re
 import subprocess
 import shlex
 import sys
@@ -11,9 +12,14 @@ from importlib.util import spec_from_file_location, module_from_spec
 from .errors import BoxCommandError, BoxPathError
 
 __all__ = [
+    'make_module_name',
     'load_py_module',
     'run_command',
 ]
+
+
+def make_module_name(module_name):
+    return re.sub(r"[_\W]+", "_", module_name)
 
 
 def load_py_module(module_path):
@@ -26,7 +32,7 @@ def load_py_module(module_path):
 @functools.lru_cache(maxsize=10)
 def _load_py_module(module_path):
     with tempfile.TemporaryDirectory() as tmpd:
-        module_name = module_path.name
+        module_name = make_module_name(module_path.name)
         module_link = Path(tmpd) / (module_name + ".py")
         module_link.symlink_to(module_path)
         spec = spec_from_file_location(module_name, str(module_link))

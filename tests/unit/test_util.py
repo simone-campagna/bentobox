@@ -1,7 +1,6 @@
 import shlex
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -12,30 +11,46 @@ from bentobox.errors import (
     BoxPathError,
 )
 from bentobox.util import (
+    make_module_name,
     load_py_module,
     run_command,
     print_err,
 )
 
 
-def test_load_py_module():
-    with tempfile.TemporaryDirectory() as tmpd:
-        mod_path = Path(tmpd) / "mymod"
-        with open(mod_path, "w") as fmod:
-            fmod.write("""\
+_mod_names = [
+    ["mymod", "mymod"],
+    ["my_mod", "my_mod"],
+    ["my-mod","my_mod"],
+    ["my.mod", "my_mod"],
+    ["my-_.mod", "my_mod"],
+    ["my___mod", "my_mod"],
+    ["-my-mod", "_my_mod"],
+]
+
+
+@pytest.mark.parametrize("mod_name, fixed_mod_name", _mod_names)
+def test_make_module_name(tmp_path, mod_name, fixed_mod_name):
+    assert make_module_name(mod_name) == fixed_mod_name
+
+
+@pytest.mark.parametrize("mod_name, fixed_mod_name", _mod_names)
+def test_load_py_module(tmp_path, mod_name, fixed_mod_name):
+    mod_path = tmp_path / mod_name
+    with open(mod_path, "w") as fmod:
+        fmod.write("""\
 def foo(i, j):
     return i * j
 """)
+    mod = load_py_module(mod_path)
+    assert mod.__name__ == fixed_mod_name
+    assert mod.foo(2, 4) == 8
+
+
+def test_load_py_module_error(tmp_path):
+    mod_path = tmp_path / "mymod"
+    with pytest.raises(BoxPathError) as exc_info:
         mod = load_py_module(mod_path)
-        assert mod.__name__ == "mymod"
-        assert mod.foo(2, 4) == 8
-
-
-def test_load_py_module_error():
-    with tempfile.TemporaryDirectory() as tmpd:
-        mod_path = Path(tmpd) / "mymod"
-        with pytest.raises(BoxPathError) as exc_info:
-            mod = load_py_module(mod_path)
 
 
 def mk_cmd(cmdline):

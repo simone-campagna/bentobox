@@ -103,10 +103,6 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
             "box_name": box_name,
             "python_interpreter": python_interpreter,
             "install_dir": box_file.default_install_dir(box_name),
-            "orig": {
-                "install_dir": None,
-                "python_interpreter": None,
-            },
             "wrap_mode": wrap_info.wrap_mode.name,
             "wraps": wrap_info.wraps,
             "freeze_env": freeze_env,
@@ -117,6 +113,10 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
             "init_venv_packages": init_packages,
             "packages": user_packages,
             "repo": repo,
+            "__internal__": {
+                "install_dir": None,
+                "python_interpreter": None,
+            },
         }
 
         with open(output_path, "w+") as f_out, open(template, "r") as f_in:

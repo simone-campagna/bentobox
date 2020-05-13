@@ -9,10 +9,6 @@
     "box_name": "box-name",
     "install_dir": "~/.bentobox/boxes/box-name",
     "python_interpreter": "/usr/bin/env python3",
-    "orig": {
-        "install_dir": null,
-        "python_interpreter": null
-    },
     "wrap_mode": "NONE",
     "wraps": null,
     "freeze_env": true,
@@ -32,9 +28,16 @@
          "pkg2": {
              "pkg2-0.2.1.tar.gz": "abcd0123"
           }
+    },
+    "__internal__": {
+        "install_dir": null,
+        "python_interpreter": null
     }
 }
 """
+
+# disable updating the original module in-place
+FILE_PATH = None  # pylint: disable=wrong-import-position
 
 # --- end-of-header ---
 
@@ -222,7 +225,8 @@ def configure_logging(verbose_level=None):
     _LOG_STATE = new_log_state
 
 
-configure_logging()
+if FILE_PATH is not None:  # pragma: no cover
+    configure_logging()
 
 
 VarInfo = collections.namedtuple(  # pylint: disable=invalid-name
@@ -246,7 +250,10 @@ def get_env_var(var_name, var_type=str, default=None, description=None):
 
 def _get_env_var(var_name, var_type=str, default=None):
     """Get an environment variable"""
-    value = os.environ.get(var_name, None)
+    if FILE_PATH is None:
+        value = None
+    else:
+        value = os.environ.get(var_name, None)
     if value is None:
         return False, default
     else:
@@ -254,7 +261,7 @@ def _get_env_var(var_name, var_type=str, default=None):
             return True, var_type(value)
         except (ValueError, TypeError):
             LOG.warning("%s=%r: invalid value", var_name, value)
-            return True, default
+            return False, default
 
 
 def boolean(value):
@@ -294,7 +301,8 @@ FORCE_REINSTALL = get_env_var(
     description="force reinstall")
 
 
-configure_logging(VERBOSE_LEVEL)
+if FILE_PATH is not None:  # pragma: no cover
+    configure_logging(VERBOSE_LEVEL)
 
 
 def default_install_dir(box_name=None):
@@ -314,15 +322,6 @@ def get_install_dir():
     return Path(install_dir).expanduser()
 
 
-def get_config():
-    """Get the installed config file, if it exists"""
-    config_file = ConfigFile()
-    if config_file.path.is_file():
-        with config_file:
-            return config_file.config
-    return None
-
-
 class ConfigFile:
     def __init__(self, mode="a+", lock=False):
         self.__path = get_install_dir() / 'bentobox-config.json'
@@ -335,21 +334,40 @@ class ConfigFile:
     def path(self):
         return self.__path
 
+    @property
+    def mode(self):
+        return self.__mode
+
+    @property
+    def lock(self):
+        return self.__lock
+
     def __enter__(self):
         path = self.__path
         make_parent_dir(path)
         self.__file = open(path, self.__mode)
         if self.__lock:
             LOG.debug("acquiring lock %s...", path)
-            fcntl.lockf(self.__file.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(self.__file.fileno(), fcntl.LOCK_EX)
             LOG.debug("lock %s acquired", path)
         return self
+
+    def is_locked(self):
+        if not self.__path.exists():
+            return False
+        with open(self.__path, 'a+') as fhandle:
+            try:
+                fcntl.flock(fhandle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except IOError:
+                return True
+            else:
+                return False
 
     def __exit__(self, exc_type, exc_value, tback):
         if self.__lock:
             path = self.__path
             LOG.debug("releasing lock %s...", path)
-            fcntl.lockf(self.__file.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(self.__file.fileno(), fcntl.LOCK_UN)
             LOG.debug("lock %s released", path)
         self.__file.close()
 
@@ -376,6 +394,15 @@ class ConfigFile:
     def config(self, value):
         self.store(value)
         self.__config = value
+
+
+def get_config():
+    """Get the installed config file, if it exists"""
+    config_file = ConfigFile()
+    if config_file.path.is_file():
+        with config_file:
+            return config_file.config
+    return None
 
 
 def get_wrap_info(state=STATE):
@@ -474,6 +501,9 @@ def create_header(state, fill_len=None):
 """
 {state_json}
 """
+
+FILE_PATH = __file__  # pylint: disable=wrong-import-position
+
 '''.format(python_interpreter=state['python_interpreter'],
            state_json=json.dumps(tojson(state), indent=4))
     if fill_len:
@@ -644,7 +674,7 @@ def replace_state(output_path, state):
         header += filler(fill_len=HEADER_FILL_LEN)
         if not output_path.exists():
             make_parent_dir(output_path)
-            shutil.copy(__file__, output_path)
+            shutil.copy(FILE_PATH, output_path)
         with set_write_mode(output_path):
             output_path_swp = output_path.with_name(output_path.name + ".swp")
             make_parent_dir(output_path_swp)
@@ -674,31 +704,31 @@ def _update_box_header(output, install_dir=None, python_interpreter=None):
     if (UPDATE_SHEBANG and python_interpreter is not None and
             python_interpreter != str(python_interpreter)):
         output("replacing shebang...")
-        if not state['orig']['python_interpreter']:
-            state['orig']['python_interpreter'] = state['python_interpreter']
+        if not state['__internal__']['python_interpreter']:
+            state['__internal__']['python_interpreter'] = state['python_interpreter']
         state['python_interpreter'] = python_interpreter
     if (install_dir is not None and
             (state['install_dir'] is None or not same_path(state['install_dir'], install_dir))):
         output("replacing install_dir...")
-        if not state['orig']['install_dir']:
-            state['orig']['install_dir'] = state['install_dir']
+        if not state['__internal__']['install_dir']:
+            state['__internal__']['install_dir'] = state['install_dir']
         state['install_dir'] = install_dir
-    replace_state(__file__, state)
+    replace_state(FILE_PATH, state)
 
 
 def _reset_box_header(output):
     """Reset the box header in place"""
     if not UPDATE_SHEBANG:
         return
-    if STATE['orig']['python_interpreter'] is None:
+    if STATE['__internal__']['python_interpreter'] is None:
         return
     output("resetting shebang...")
     state = STATE.copy()
-    state['python_interpreter'] = state['orig']['python_interpreter']
-    state['orig']['python_interpreter'] = None
-    state['install_dir'] = state['orig']['install_dir']
-    state['orig']['install_dir'] = None
-    replace_state(__file__, state)
+    state['python_interpreter'] = state['__internal__']['python_interpreter']
+    state['__internal__']['python_interpreter'] = None
+    state['install_dir'] = state['__internal__']['install_dir']
+    state['__internal__']['install_dir'] = None
+    replace_state(FILE_PATH, state)
 
 
 def configure(output_path, install_dir=UNDEFINED, wrap_info=UNDEFINED,
@@ -978,7 +1008,7 @@ def _extract(output, hashlist, output_dir):
     if not output_dir.is_dir():
         output("creating output dir {}...".format(output_dir))
         output_dir.mkdir()
-    output("reading repo packages from {}...".format(__file__))
+    output("reading repo packages from {}...".format(FILE_PATH))
     package_files = []
     package_filename = None
     package_name = None
@@ -991,7 +1021,7 @@ def _extract(output, hashlist, output_dir):
                 hashlist.append(package_hash)
     hashset = set(hashlist)
     try:
-        with open(__file__, "r") as source_file:
+        with open(FILE_PATH, "r") as source_file:
             for line in source_file:
                 if line.startswith(MARK_REPO):
                     break
@@ -1324,7 +1354,7 @@ Box {box_name!r} - configure box script
     output_mgrp.add_argument(
         "-i", "--in-place",
         dest="output_path",
-        action="store_const", const=Path(__file__),
+        action="store_const", const=Path(FILE_PATH),
         help="change the box in-place")
     return parser
 
@@ -1510,7 +1540,7 @@ def main(args=None):
                 LOG.debug("%r has been successfully uninstalled", STATE['box_name'])
             if FORCE_REINSTALL:
                 if config is not None:
-                    executable = __file__
+                    executable = FILE_PATH
                     cmdline = [executable] + list(args)
                     environ = get_environ(config)
                     environ.pop('BBOX_FORCE_REINSTALL', None)
