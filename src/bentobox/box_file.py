@@ -52,6 +52,7 @@ import json
 import logging
 import logging.config
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -415,12 +416,13 @@ def get_wrap_info(state=STATE):
 def get_environ(config):
     """Get the environment for command execution"""
     environ = os.environ.copy()
-    old_path = environ.get("PATH", "")
     venv_bin_dir = Path(config['venv_bin_dir'])
-    new_path = str(venv_bin_dir.resolve())
+    path_list = []
+    path_list.append(str(Path(venv_bin_dir).absolute()))
+    old_path = environ.get("PATH", "").strip(":")
     if old_path:
-        new_path += ":" + old_path
-    environ['PATH'] = new_path
+        path_list.extend(re.split(r"::+", old_path.strip(":")))
+    environ['PATH'] = ":".join(path_list)
     return environ
 
 
@@ -428,7 +430,7 @@ def find_executables(bindir=UNDEFINED):
     """Get the list of installed commands, or None if not installed"""
     if bindir is UNDEFINED:
         config = get_config()
-        if config is not None:
+        if config is None:
             return None
         bindir = config["venv_bin_dir"]
     commands = []
@@ -516,19 +518,14 @@ def get_repo():
     return STATE['repo']
 
 
-def _fmt_command(command):
-    if command.name == command.command:
-        return command.name
-    else:
-        return command.name + ":" + command.command
-
-
 def get_box_type(state=STATE):
     wrap_mode = state['wrap_mode']
     if wrap_mode is WrapMode.SINGLE:
         return 'wraps({})'.format(tojson(state['wraps']))
     elif wrap_mode is WrapMode.MULTIPLE:
-        return 'wraps({})'.format('|'.join(tojson(value) for value in state['wraps']))
+        return 'wraps[{}]'.format(', '.join(tojson(value) for value in state['wraps']))
+    elif wrap_mode is WrapMode.ALL:
+        return 'wraps(*)'
     else:
         return 'installer'
 
@@ -544,17 +541,16 @@ class Output:
         self._header = header
         self._prev_line = None
         self._verbose_level = verbose_level
+        self._columns = None
         if self._verbose_level > 0:
             self._file = sys.stderr
             self._persistent = self._verbose_level >= 2 or not self._file.isatty()
-            self._columns = None
             if not self._persistent:
                 with contextlib.suppress(OSError):
                     self._columns, _ = os.get_terminal_size()
         else:
             self._file = io.StringIO()
             self._persistent = True
-            self._columns = None
 
     def __enter__(self):
         return self
