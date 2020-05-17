@@ -55,6 +55,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -613,14 +614,17 @@ def set_install_dir(install_dir):
 def set_write_mode(filename):
     """Context manager to locally add write mode to a file"""
     filename = Path(filename)
-    old_mode = filename.stat().st_mode
-    new_mode = old_mode | 0o200
-    try:
-        filename.chmod(new_mode)
+    if filename.exists():
+        old_mode = filename.stat().st_mode
+        new_mode = old_mode | stat.S_IWUSR
+        try:
+            filename.chmod(new_mode)
+            yield
+        finally:
+            if filename.exists():
+                filename.chmod(old_mode)
+    else:
         yield
-    finally:
-        if filename.exists():
-            filename.chmod(old_mode)
 
 
 def get_header_len(output_path):
@@ -698,7 +702,7 @@ def _update_box_header(output, install_dir=None, python_interpreter=None):
     """Update the box header in place"""
     state = STATE.copy()
     if (UPDATE_SHEBANG and python_interpreter is not None and
-            python_interpreter != str(python_interpreter)):
+            python_interpreter != str(STATE['python_interpreter'])):
         output("replacing shebang...")
         if not state['__internal__']['python_interpreter']:
             state['__internal__']['python_interpreter'] = state['python_interpreter']
@@ -714,10 +718,6 @@ def _update_box_header(output, install_dir=None, python_interpreter=None):
 
 def _reset_box_header(output):
     """Reset the box header in place"""
-    if not UPDATE_SHEBANG:
-        return
-    if STATE['__internal__']['python_interpreter'] is None:
-        return
     output("resetting shebang...")
     state = STATE.copy()
     state['python_interpreter'] = state['__internal__']['python_interpreter']

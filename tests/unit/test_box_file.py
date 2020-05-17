@@ -1,7 +1,10 @@
+import copy
 import io
 import json
 import fcntl
 import os
+import shutil
+import stat
 import subprocess
 import sys
 
@@ -12,6 +15,7 @@ import pytest
 
 
 from bentobox import box_file as _box_file
+from bentobox.util import load_py_module
 
 
 @pytest.mark.parametrize("var_name, var_value", [
@@ -628,3 +632,221 @@ def test_set_install_dir(tmp_path):
     with _box_file.set_install_dir(install_dir):
         assert _box_file.get_install_dir() == install_dir
     assert str(_box_file.get_install_dir()) == str(orig_install_dir)
+
+
+@pytest.mark.parametrize("pre_mode, post_exists", [
+    [0o444, True],
+    [0o744, True],
+    [0o111, True],
+    [0o444, False],
+])
+def test_set_write_mode_exists(tmp_path, pre_mode, post_exists):
+    tmp_file = tmp_path / 'file'
+    tmp_file.touch()
+    tmp_file.chmod(pre_mode)
+    init_mode = tmp_file.stat().st_mode
+    with _box_file.set_write_mode(tmp_file):
+        with open(tmp_file, 'w') as fout:
+            fout.write("...\n")
+        if not post_exists:
+            tmp_file.unlink()
+    if post_exists:
+        assert tmp_file.stat().st_mode == init_mode
+
+
+def test_set_write_mode_missing(tmp_path):
+    tmp_file = tmp_path / 'file'
+    assert not tmp_file.exists()
+    with _box_file.set_write_mode(tmp_file):
+        assert not tmp_file.exists()
+    assert not tmp_file.exists()
+    
+
+@pytest.mark.parametrize("output, length", [
+    ["", 0],
+    [_box_file.MARK_END_OF_HEADER, 0],
+    [_box_file.MARK_END_OF_HEADER + '\n', 0],
+    ['x' + _box_file.MARK_END_OF_HEADER + '\n', 1 + len(_box_file.MARK_END_OF_HEADER) + 1],
+    ['\n' + _box_file.MARK_END_OF_HEADER + '\n', 1],
+    ['x\n' + _box_file.MARK_END_OF_HEADER + '\n', 2],
+    ['x\n\nyy\n' + _box_file.MARK_END_OF_HEADER + '\n', 6],
+])
+def test_get_header_len(tmp_path, output, length):
+    tmp_file = tmp_path / 'file'
+    with open(tmp_file, 'w') as fout:
+        fout.write(output)
+    assert _box_file.get_header_len(tmp_file) == length
+
+
+@pytest.mark.parametrize("fill_len, kwargs, output", [
+    [0, {}, ''],
+    [1, {}, '\n'],
+    [10, {}, '#########\n'],
+    [100, {}, '################################################################################\n##################\n'],
+    [10, {'line_len': 5}, '#####\n###\n'],
+])
+def test_filler(fill_len, kwargs, output):
+    assert _box_file.filler(fill_len, **kwargs) == output
+    assert len(output) == fill_len
+
+
+def _mk_state(state):
+    base_state = {
+        'box_name': 'test-box-name',
+        'python_interpreter': '/opt/python36/bin/python',
+        'install_dir': None,
+        'update_shebang': True,
+        'wrap_mode': _box_file.WrapMode.NONE,
+        'wraps': None,
+        'verbose_level': 2,
+        'freeze_env': True,
+    }
+    base_state.update(state)
+    return base_state
+
+
+@pytest.mark.parametrize("init_state", [
+    {},
+    {'x': 10},
+    {'values': [1, 2, 3], 'alpha': 'xyz'},
+    {'big_big_var': ":xy:" * 1024},
+])
+@pytest.mark.parametrize("in_place", [True, False])
+def test_replace_state(tmp_path, in_place, init_state):
+    state = _mk_state({})
+    state.update(init_state)
+    tmp_box_file = tmp_path / "box-file"
+    source_file = tmp_path / Path(_box_file.__file__).name
+    shutil.copy(_box_file.__file__, source_file)
+    if not in_place:
+        shutil.copy(_box_file.__file__, tmp_box_file)
+    with mock.patch("bentobox.box_file.FILE_PATH", str(source_file)):
+        _box_file.replace_state(tmp_box_file, state)
+    box_module = load_py_module(tmp_box_file)
+    assert _box_file.tojson(box_module.STATE) == _box_file.tojson(state)
+
+
+@pytest.mark.parametrize("old_state, install_dir, python_interpreter, new_state", [
+    [
+        {'update_shebang': True, 'python_interpreter': 'py',
+         '__internal__': {'python_interpreter': 'orig_py', 'install_dir': None},
+        },
+        None,
+        None,
+        {'update_shebang': True, 'python_interpreter': 'py',
+         '__internal__': {'python_interpreter': 'orig_py', 'install_dir': None},
+        },
+    ],
+    [
+        {'update_shebang': True, 'python_interpreter': 'py',
+         '__internal__': {'python_interpreter': 'orig_py', 'install_dir': None},
+        },
+        None,
+        'py',
+        {'update_shebang': True, 'python_interpreter': 'py',
+         '__internal__': {'python_interpreter': 'orig_py', 'install_dir': None},
+        },
+    ],
+    [
+        {'update_shebang': False, 'python_interpreter': 'py',
+         '__internal__': {'python_interpreter': 'orig_py', 'install_dir': None},
+        },
+        None,
+        'new_py',
+        {'update_shebang': False, 'python_interpreter': 'py',
+         '__internal__': {'python_interpreter': 'orig_py', 'install_dir': None},
+        },
+    ],
+    [
+        {'update_shebang': True, 'python_interpreter': 'py',
+         '__internal__': {'python_interpreter': None, 'install_dir': None},
+        },
+        None,
+        'new_py',
+        {'update_shebang': True, 'python_interpreter': 'new_py',
+         '__internal__': {'python_interpreter': 'py', 'install_dir': None},
+        },
+    ],
+    [
+        {'update_shebang': True, 'python_interpreter': 'py', 'install_dir': '/xx',
+         '__internal__': {'python_interpreter': None, 'install_dir': None},
+        },
+        '/yy',
+        'new_py',
+        {'update_shebang': True, 'python_interpreter': 'new_py', 'install_dir': '/yy',
+         '__internal__': {'python_interpreter': 'py', 'install_dir': '/xx'},
+        },
+    ],
+    [
+        {'update_shebang': True, 'python_interpreter': 'py', 'install_dir': '/xx',
+         '__internal__': {'python_interpreter': 'orig_py', 'install_dir': '/uuu'},
+        },
+        '/yy',
+        'new_py',
+        {'update_shebang': True, 'python_interpreter': 'new_py', 'install_dir': '/yy',
+         '__internal__': {'python_interpreter': 'orig_py', 'install_dir': '/uuu'},
+        },
+    ],
+])
+def test_update_box_header(tmp_path, old_state, install_dir, python_interpreter, new_state):
+    old_state = _mk_state(old_state)
+    new_state = _mk_state(new_state)
+
+    tmp_box_file = tmp_path / "box-file"
+    shutil.copy(_box_file.__file__, tmp_box_file)
+    with mock.patch("bentobox.box_file.FILE_PATH", str(tmp_box_file)), \
+         mock.patch("bentobox.box_file.UPDATE_SHEBANG", old_state['update_shebang']), \
+         mock.patch("bentobox.box_file.STATE", old_state):
+        _box_file._update_box_header(mock.MagicMock(), install_dir=install_dir, python_interpreter=python_interpreter)
+    box_module = load_py_module(tmp_box_file)
+    assert _box_file.tojson(box_module.STATE) == _box_file.tojson(new_state)
+
+
+@pytest.mark.parametrize("old_state, new_state", [
+    [
+        {'install_dir': '/new_dir', 'python_interpreter': 'new_py',
+         '__internal__': {'python_interpreter': 'old_py', 'install_dir': '/old_dir'},
+        },
+        {'install_dir': '/old_dir', 'python_interpreter': 'old_py',
+         '__internal__': {'python_interpreter': None, 'install_dir': None},
+        },
+    ],
+])
+def test_reset_box_header(tmp_path, old_state, new_state):
+    old_state = _mk_state(old_state)
+    new_state = _mk_state(new_state)
+
+    tmp_box_file = tmp_path / "box-file"
+    shutil.copy(_box_file.__file__, tmp_box_file)
+    with mock.patch("bentobox.box_file.FILE_PATH", str(tmp_box_file)), \
+         mock.patch("bentobox.box_file.STATE", old_state):
+        _box_file._reset_box_header(mock.MagicMock())
+    box_module = load_py_module(tmp_box_file)
+
+
+@pytest.mark.parametrize("kwargs, checks", [
+    [{},
+     {}],
+    [{'install_dir': '/tmp/x'},
+     {'install_dir': '/tmp/x'}],
+    [{'install_dir': '/tmp/x', 'wrap_info': _box_file.WrapInfo(_box_file.WrapMode.MULTIPLE, {'a': 'a.x', 'b': 'b.x'})},
+     {'install_dir': '/tmp/x', 'wrap_mode': _box_file.WrapMode.MULTIPLE, 'wraps': {'a': 'a.x', 'b': 'b.x'}}],
+    [{'install_dir': None, 'verbose_level': 7, 'freeze_env': False, 'update_shebang': False},
+     {'install_dir': None, 'verbose_level': 7, 'freeze_env': False, 'update_shebang': False}],
+])
+def test_configure(tmp_path, kwargs, checks):
+    old_state = _mk_state({})
+    tmp_box_file = tmp_path / "box-file"
+    shutil.copy(_box_file.__file__, tmp_box_file)
+    rs_mock = mock.MagicMock()
+    with mock.patch("bentobox.box_file.FILE_PATH", str(tmp_box_file)), \
+         mock.patch("bentobox.box_file.STATE", old_state), \
+         mock.patch("bentobox.box_file.replace_state", rs_mock):
+        _box_file.configure(tmp_box_file, **kwargs)
+    c_args, c_kwargs = rs_mock.call_args
+    assert not c_kwargs
+    tojson = _box_file.tojson
+    assert tojson(c_args[0]) == tojson(tmp_box_file)
+    new_state = c_args[1]
+    for key, value in checks.items():
+        assert tojson(new_state[key]) == tojson(value)
