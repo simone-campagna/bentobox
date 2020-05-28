@@ -25,11 +25,11 @@ def mk_kwargs(argstring):
 
 
 def test_function_create():
-    kwargs = mk_kwargs("""box_name, wrap_info, output_path,
+    kwargs = mk_kwargs("""box_name, box_version, wrap_info, output_path,
                           packages, update_shebang, check,
                           python_interpreter, force_overwrite,
                           verbose_level, pip_install_args,
-                          freeze_env, freeze_pypi""")
+                          freeze_env, freeze_pypi, download_mode, install_dir""")
     print(kwargs)
     create_box_file_mock = mock.MagicMock()
     with mock.patch("bentobox.cli.create_box_file", create_box_file_mock):

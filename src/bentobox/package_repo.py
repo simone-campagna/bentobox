@@ -3,6 +3,7 @@ Package repo
 """
 
 import collections.abc
+import enum
 import uuid
 from pathlib import Path
 
@@ -14,8 +15,15 @@ from .util import run_command
 
 
 __all__ = [
+    'DownloadMode',
     'PackageRepo',
 ]
+
+
+class DownloadMode(enum.Enum):
+    SOURCE = 0
+    BINARY = 1
+    FREE = 2
 
 
 class PackageRepo(collections.abc.Mapping):
@@ -59,7 +67,7 @@ class PackageRepo(collections.abc.Mapping):
             raise BoxPathError("path {} does not exist".format(package_path))
         workdir = self.workdir
         pkg_workdir = workdir / uuid.uuid4().hex
-        pkg_workdir.mkdir()
+        pkg_workdir.mkdir(parents=True)
         cmdline = ["pip", "wheel", "--no-deps", "--only-binary", ":all:",
                    "--wheel-dir", str(pkg_workdir), str(package_path)]
         run_command(cmdline)
@@ -119,11 +127,11 @@ class PackageRepo(collections.abc.Mapping):
             requirements.append(str(pkginfo[package_name]))
         return requirements
 
-    def get_package_paths(self, freeze_pypi=True):
+    def get_package_paths(self, freeze_pypi=True, download_mode=DownloadMode.FREE):
         pip_dir = self.workdir / 'pip-{}'.format(uuid.uuid4().hex)
         pip_args = []
         package_paths = []
-        if self._pkgpaths:
+        if self._pkgpaths or self._pkginfo:
             pip_repo_dir = pip_dir / "repo"
             if not pip_repo_dir.exists():
                 pip_repo_dir.mkdir(parents=True)
@@ -147,12 +155,19 @@ class PackageRepo(collections.abc.Mapping):
                     '--dest', str(download_dir),
                     '--build', str(build_dir),
                     '--src', str(src_dir),
-                    '--only-binary', ':all:',
-                    '--platform', 'any',
-                    '--python-version', '36',
-                    '--implementation', 'py',
-                    '--abi', 'none',
                 ]
+                if download_mode is DownloadMode.SOURCE:
+                    cmdline += [
+                        '--no-binary', ':all:',
+                    ]
+                elif download_mode is DownloadMode.BINARY:
+                    cmdline += [
+                        '--only-binary', ':all:',
+                        '--platform', 'any',
+                        '--python-version', '36',
+                        '--implementation', 'py',
+                        '--abi', 'none',
+                    ]
                 cmdline.extend(pip_args)
                 for package_info in self._pkginfo.values():
                     cmdline.append(str(package_info))

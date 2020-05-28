@@ -6,6 +6,8 @@ import collections
 import hashlib
 import re
 import tempfile
+import datetime
+import uuid
 from base64 import b64encode
 from pathlib import Path
 
@@ -19,7 +21,7 @@ from .errors import (
     BoxNameError,
     BoxPathError,
 )
-from .package_repo import PackageRepo
+from .package_repo import PackageRepo, DownloadMode
 from .util import (
     load_py_module,
 )
@@ -38,18 +40,29 @@ Hash = hashlib.sha1
 RE_BOX_NAME = re.compile(r"^[a-zA-Z_]+\w*(?:\-\w+)*$")
 
 
+def get_box_version(mode='timestamp:compact'):
+    if mode == 'uid':
+        return uuid.uuid4().hex
+    elif mode == 'timestamp:int':
+        return str(int(datetime.datetime.utcnow().timestamp()))
+    elif mode == 'timestamp:local':
+        return datetime.datetime.utcnow().strftime("%Y-%m-%d_%H:%M:%S")
+    else:
+        return datetime.datetime.utcnow().strftime("%Y%m%d.%H%M%S")
+
+
 def check_box_name(value):
     if not RE_BOX_NAME.match(value):
         raise BoxNameError(value)
     return value
 
 
-def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
+def create_box_file(box_name, box_version=None, output_path=None, mode=0o555, wrap_info=None,
                     packages=(), init_venv_packages=None,
                     pip_install_args=None, update_shebang=True, check=True,
-                    freeze_env=True, freeze_pypi=True,
+                    freeze_env=True, freeze_pypi=True, download_mode=DownloadMode.FREE,
                     python_interpreter=DEFAULT_PYTHON_INTERPRETER,
-                    force_overwrite=False, verbose_level=None):
+                    force_overwrite=False, verbose_level=None, install_dir=None):
     # pylint: disable=too-many-arguments
     if init_venv_packages is None:
         init_venv_packages = INIT_VENV_PACKAGES
@@ -57,7 +70,14 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
         verbose_level = box_file.VERBOSE_LEVEL
     if wrap_info is None:
         wrap_info = box_file.WrapInfo(box_file.WrapMode.NONE, None)
+    if box_version is None:
+        box_version = get_box_version()
     box_name = check_box_name(box_name)
+    if install_dir is None:
+        install_dir = box_file.default_install_dir(
+            {'box_name': box_name, 'box_version': box_version})
+    else:
+        install_dir = install_dir.format(box_name=box_name, box_version=box_version)
     if output_path is None:
         output_path = Path(box_name).resolve()
     else:
@@ -84,7 +104,9 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
         init_package_names = pkg_repo.add_requirements(init_venv_packages)
         user_package_names = pkg_repo.add_requirements(packages)
 
-        package_paths = pkg_repo.get_package_paths(freeze_pypi=freeze_pypi)
+        package_paths = pkg_repo.get_package_paths(
+            freeze_pypi=freeze_pypi,
+            download_mode=download_mode)
 
         package_paths.sort(key=lambda x: x[1])
         package_paths.sort(key=lambda x: x[0])
@@ -100,9 +122,10 @@ def create_box_file(box_name, output_path=None, mode=0o555, wrap_info=None,
         state = {
             "version": BENTOBOX_VERSION,
             "box_file_version": BOX_FILE_VERSION,
+            "box_version": box_version,
             "box_name": box_name,
+            "install_dir": install_dir,
             "python_interpreter": python_interpreter,
-            "install_dir": box_file.default_install_dir(box_name),
             "wrap_mode": wrap_info.wrap_mode.name,
             "wraps": wrap_info.wraps,
             "freeze_env": freeze_env,

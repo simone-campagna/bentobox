@@ -7,6 +7,7 @@
     "version": "0.1.0",
     "box_file_version": 1,
     "box_name": "box-name",
+    "box_version": "abc123",
     "install_dir": "~/.bentobox/boxes/box-name",
     "python_interpreter": "/usr/bin/env python3",
     "wrap_mode": "NONE",
@@ -307,11 +308,11 @@ if FILE_PATH is not None:  # pragma: no cover
     configure_logging(VERBOSE_LEVEL)
 
 
-def default_install_dir(box_name=None):
+def default_install_dir(state=None):
     """Returns the default install dir"""
-    if box_name is None:
-        box_name = STATE['box_name']
-    return DEFAULT_INSTALL_ROOT_DIR / box_name
+    if state is None:
+        state = STATE
+    return DEFAULT_INSTALL_ROOT_DIR / state['box_name'] / state['box_version']
 
 
 def get_install_dir():
@@ -780,6 +781,8 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_box_header
             config = {
                 'version': VERSION,
                 'box_file_version': STATE['box_file_version'],
+                'box_name': STATE['box_name'],
+                'box_version': STATE['box_version'],
                 'install_dir': install_dir,
                 'env_file': env_file,
                 'source_file': source_file,
@@ -802,23 +805,7 @@ def install(env_file=None, reinstall=None, verbose_level=None, update_box_header
                             "installed version: {} current version: {}".format(
                                 installed_box_file_version,
                                 STATE['box_file_version']))
-                    installed_packages = installed_config['packages']
-                    configured_packages = STATE['packages']
-                    num_common_packages = 0
-                    for pkg1, pkg2 in zip(installed_packages, configured_packages):
-                        if pkg1 != pkg2:
-                            break
-                        num_common_packages += 1
-                    if STATE['packages'] != installed_config['packages']:
-                        for ptype, packages in [('installed', installed_config['packages']),
-                                                ('configured', STATE['packages'])]:
-                            LOG.debug("%s packages:", ptype)
-                            for idx, pkg in enumerate(packages):
-                                if idx < num_common_packages:
-                                    pre = '='
-                                else:
-                                    pre = '!'
-                                LOG.debug("  %s %s", pre, pkg)
+                    if installed_config['box_version'] != STATE['box_version']:
                         if reinstall is None:
                             LOG.warning("already installed, but reinstall is needed")
                             do_install = True
@@ -897,6 +884,9 @@ exec {python_exe} "$@"
                     base_commands = set(find_executables(venv_bin_dir))
                     installed_commands = set(find_executables(venv_bin_dir)) - base_commands
                     config["installed_commands"] = sorted(installed_commands)
+
+                    output("removing pypi repo...")
+                    shutil.rmtree(repo_dir, ignore_errors=True)
 
                     output("creating activate file {}...".format(bentobox_env_file))
                     with open(bentobox_env_file, "w") as fhandle:
@@ -980,6 +970,7 @@ def build_pypi_index(repo_dir, package_files, pypi_dir=None):
     pypi_index_path = pypi_dir / 'index.html'
     content = []
     for package_name, package_filename in package_files:
+        package_name = re.sub(r"[-_.]+", "-", package_name).lower()
         content.append(PACKAGE_REF_SOURCE.format(package_name=package_name))
         package_path = repo_dir / package_filename
         package_dir = pypi_dir / package_name

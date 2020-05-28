@@ -20,6 +20,7 @@ from .box_file import (
     WrapInfo,
     WrapMode,
 )
+from .package_repo import PackageRepo, DownloadMode
 
 
 RE_BOX_NAME = re.compile(r"^\w+(?:[\-\w+])*$")
@@ -36,18 +37,27 @@ def t_python_exe(value):
     return value
 
 
-def function_create(box_name, wrap_info, output_path,
+def function_download(packages, repo_dir, freeze_pypi=True):
+    pkg_repo = PackageRepo(workdir=repo_dir)
+    dummy_package_names = pkg_repo.add_requirements(packages)
+    dummy_package_paths = pkg_repo.get_package_paths(freeze_pypi=freeze_pypi)
+
+
+def function_create(box_name, box_version, wrap_info, output_path,
                     packages, update_shebang, check,
                     python_interpreter, force_overwrite,
                     verbose_level, pip_install_args,
-                    freeze_env, freeze_pypi):
+                    freeze_env, freeze_pypi, download_mode,
+                    install_dir):
     # pylint: disable=too-many-arguments
-    create_box_file(box_name, output_path=output_path, wrap_info=wrap_info,
+    create_box_file(box_name, box_version=box_version,
+                    output_path=output_path, wrap_info=wrap_info,
                     pip_install_args=pip_install_args,
                     freeze_env=freeze_env, freeze_pypi=freeze_pypi,
+                    download_mode=download_mode,
                     packages=packages, update_shebang=update_shebang,
                     check=check, python_interpreter=python_interpreter,
-                    force_overwrite=force_overwrite,
+                    force_overwrite=force_overwrite, install_dir=install_dir,
                     verbose_level=verbose_level)
 
 
@@ -62,6 +72,79 @@ def booldef(bool_value, kwargs):
     return ''
 
 
+def add_freeze_env_argument(parser):
+    freeze_env_mgrp = parser.add_mutually_exclusive_group()
+    freeze_env_kwargs = {'dest': 'freeze_env', 'default': True}
+    freeze_env_mgrp.add_argument(
+        "-e", "--freeze-env",
+        action="store_true",
+        help="freeze virtualenv environment" + booldef(True, freeze_env_kwargs),
+        **freeze_env_kwargs)
+    freeze_env_mgrp.add_argument(
+        "-E", "--no-freeze-env",
+        action="store_false",
+        help="do not freeze virtualenv environment" + booldef(False, freeze_env_kwargs),
+        **freeze_env_kwargs)
+
+
+def t_download_mode(value):
+    return DownloadMode[value]
+
+
+def add_download_mode_argument(parser):
+    parser.add_argument(
+        "-m", "--download-mode",
+        default=DownloadMode.FREE,
+        choices=list(DownloadMode),
+        type=t_download_mode,
+        help="download mode")
+
+
+def add_freeze_pypi_argument(parser):
+    freeze_pypi_mgrp = parser.add_mutually_exclusive_group()
+    freeze_pypi_kwargs = {'dest': 'freeze_pypi', 'default': True}
+    freeze_pypi_mgrp.add_argument(
+        "-f", "--freeze-pypi",
+        action="store_true",
+        help="download packages from PyPI along with their dependencies" + \
+             booldef(True, freeze_pypi_kwargs),
+        **freeze_pypi_kwargs)
+    freeze_pypi_mgrp.add_argument(
+        "-F", "--no-freeze-pypi",
+        action="store_false",
+        help="do not download packages from PyPI" + \
+             booldef(False, freeze_pypi_kwargs),
+        **freeze_pypi_kwargs)
+
+
+def add_download_parser(subparsers):
+    parser = subparsers.add_parser(
+        "download",
+        description="""\
+Download packages
+""")
+    parser.set_defaults(
+        function=function_download,
+        function_args=['packages', 'repo_dir', 'freeze_pypi'],
+    )
+    parser.add_argument(
+        "-d", "--repo-dir",
+        type=Path,
+        required=True,
+        help="repo dir")
+
+    add_freeze_pypi_argument(parser)
+    add_download_mode_argument(parser)
+
+    parser.add_argument(
+        "packages",
+        metavar="package",
+        nargs="*",
+        default=[],
+        help="install python packages")
+    return parser
+
+
 def add_create_parser(subparsers):
     parser = subparsers.add_parser(
         "create",
@@ -70,10 +153,11 @@ Create a box file
 """)
     parser.set_defaults(
         function=function_create,
-        function_args=['box_name', 'wrap_info', 'output_path',
+        function_args=['box_name', 'box_version', 'wrap_info', 'output_path',
                        'packages', 'update_shebang', 'check', 'python_interpreter',
                        'force_overwrite', 'pip_install_args',
-                       'freeze_env', 'freeze_pypi', 'verbose_level']
+                       'freeze_env', 'freeze_pypi', 'download_mode', 'verbose_level',
+                       'install_dir']
     )
     default_verbose_level = 0
     verbose_level_group = parser.add_argument_group("verbose")
@@ -177,33 +261,29 @@ Create a box file
         help="do not update shebang when installing" + booldef(False, update_shebang_kwargs),
         **update_shebang_kwargs)
 
-    freeze_env_mgrp = box_group.add_mutually_exclusive_group()
-    freeze_env_kwargs = {'dest': 'freeze_env', 'default': True}
-    freeze_env_mgrp.add_argument(
-        "-e", "--freeze-env",
-        action="store_true",
-        help="freeze virtualenv environment" + booldef(True, freeze_env_kwargs),
-        **freeze_env_kwargs)
-    freeze_env_mgrp.add_argument(
-        "-E", "--no-freeze-env",
-        action="store_false",
-        help="do not freeze virtualenv environment" + booldef(False, freeze_env_kwargs),
-        **freeze_env_kwargs)
+    add_freeze_env_argument(box_group)
+    add_freeze_pypi_argument(box_group)
+    add_download_mode_argument(parser)
 
-    freeze_pypi_mgrp = box_group.add_mutually_exclusive_group()
-    freeze_pypi_kwargs = {'dest': 'freeze_pypi', 'default': True}
-    freeze_pypi_mgrp.add_argument(
-        "-f", "--freeze-pypi",
-        action="store_true",
-        help="download packages from PyPI along with their dependencies" + \
-             booldef(True, freeze_pypi_kwargs),
-        **freeze_pypi_kwargs)
-    freeze_pypi_mgrp.add_argument(
-        "-F", "--no-freeze-pypi",
-        action="store_false",
-        help="do not download packages from PyPI" + \
-             booldef(False, freeze_pypi_kwargs),
-        **freeze_pypi_kwargs)
+    install_dir_group = parser.add_argument_group("install dir:")
+    install_dir_mgrp = install_dir_group.add_mutually_exclusive_group()
+    install_dir_kwargs = {'dest': 'install_dir', 'default': None}
+    install_dir_mgrp.add_argument(
+        "-D", "--default-install-dir",
+        action="store_const", const=None,
+        help="default install dir",
+        **install_dir_kwargs)
+    install_dir_mgrp.add_argument(
+        "-T", "--tmp-install-dir",
+        action="store_const", const="/tmp/bbox-{box_name}/{box_version}",
+        help="install dir is in tmp",
+        **install_dir_kwargs)
+    install_dir_mgrp.add_argument(
+        "-I", "--custom-install-dir",
+        metavar="DIR",
+        type=str,
+        help="custom install dir (may contain {box_name} and {box_version})",
+        **install_dir_kwargs)
 
     parser.add_argument(
         "-o", "--output-path",
@@ -216,6 +296,11 @@ Create a box file
         type=t_box_name,
         required=True,
         help="box name")
+
+    parser.add_argument(
+        "-b", "--box-version",
+        default=None,
+        help="box version")
 
     parser.add_argument(
         "packages",
@@ -294,6 +379,7 @@ Bentobox {version} - create python boxes
 
     add_create_parser(subparsers)
     add_show_parser(subparsers)
+    # add_download_parser(subparsers)
     # add_help_parser(subparsers)
 
     namespace = parser.parse_args()

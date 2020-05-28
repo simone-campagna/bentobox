@@ -9,6 +9,7 @@ from bentobox.create_box_file import (
     check_box_name,
     create_box_file,
     check_box,
+    DownloadMode,
 )
 from bentobox.env import (
     DEFAULT_PYTHON_INTERPRETER,
@@ -286,7 +287,7 @@ def test_create_box_file(tmp_path, create_kwargs, params, expected, monkeypatch)
                 box_file_path = create_box_file(**create_kwargs)
 
     assert check_box_name_mock.call_args == ((box_name,),)
-    assert get_package_paths_mock.call_args == ((), {'freeze_pypi': freeze_pypi})
+    assert get_package_paths_mock.call_args == ((), {'download_mode': DownloadMode.FREE, 'freeze_pypi': freeze_pypi})
     for add_requirements_input, add_requirements_call_arg in add_requirements_mock.call_arg_list:
         assert add_requirements_call_arg == (add_requirements_input,)
 

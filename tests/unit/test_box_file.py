@@ -154,30 +154,31 @@ def test_resolved_path(tmp_path, monkeypatch):
     assert _box_file.resolved_path("x.txt") == tmp_path / "x.txt"
     assert _box_file.resolved_path("/x.txt") == Path("/x.txt")
 
-@pytest.mark.parametrize("box_name", [
+@pytest.mark.parametrize("state", [
     None,
-    "alpha-omega",
+    {'box_name': "alpha-omega", 'box_version': "abc123"},
 ])
-def test_default_install_dir(box_name):
-    actual_box_name = box_name
-    if actual_box_name is None:
-        actual_box_name = _box_file.STATE['box_name']
-    value = _box_file.default_install_dir(box_name)
-    assert value == _box_file.DEFAULT_INSTALL_ROOT_DIR / actual_box_name
+def test_default_install_dir(state):
+    if state is None:
+        state = _box_file.STATE
+    print(state)
+    value = _box_file.default_install_dir(state)
+    assert value == _box_file.DEFAULT_INSTALL_ROOT_DIR / state['box_name'] / state['box_version']
 
 
-@pytest.mark.parametrize("box_name, var_install_dir, state_install_dir, install_dir", [
-    ["abc", None, None, None],
-    ["abc", Path('/a'), None, Path('/a')],
-    ["abc", None, '/b', Path('/b')],
-    ["abc", Path('/a'), '/b', Path('/a')],
+@pytest.mark.parametrize("box_name, box_version, var_install_dir, state_install_dir, install_dir", [
+    ["abc", '123', None, None, None],
+    ["abc", '123', Path('/a'), None, Path('/a')],
+    ["abc", '123', None, '/b', Path('/b')],
+    ["abc", '123', Path('/a'), '/b', Path('/a')],
 ])
-def test_get_install_dir(box_name, var_install_dir, state_install_dir, install_dir):
+def test_get_install_dir(box_name, box_version, var_install_dir, state_install_dir, install_dir):
     state = _box_file.STATE.copy()
     state['install_dir'] = state_install_dir
     state['box_name'] = box_name
+    state['box_version'] = box_version
     if install_dir is None:
-        install_dir = _box_file.default_install_dir(box_name).expanduser()
+        install_dir = _box_file.default_install_dir(state).expanduser()
     with mock.patch("bentobox.box_file.INSTALL_DIR", var_install_dir), \
          mock.patch("bentobox.box_file.STATE", state):
         assert _box_file.get_install_dir() == install_dir
@@ -693,6 +694,7 @@ def test_filler(fill_len, kwargs, output):
 def _mk_state(state):
     base_state = {
         'box_name': 'test-box-name',
+        'box_version': 'abc123',
         'python_interpreter': '/opt/python36/bin/python',
         'install_dir': None,
         'update_shebang': True,
